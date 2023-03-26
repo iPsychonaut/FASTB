@@ -1,0 +1,4 @@
+[DEFAULT]
+modules_path = path/to/modules
+fasta_path = path/to/FASTA FILES
+output_path = path/to/OUTPUT FILES
