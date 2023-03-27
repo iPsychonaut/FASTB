@@ -11,28 +11,26 @@ Since each character is represented by a single byte in ASCII encoding, the size
 
 
 BINARY TETRAD ENCODING:
-| Binary Tetrad (4-bit) | Representative Character | Description |
+| ASCII Binary (8-bit) | Binary Tetrad (4-bit) | Representative Character | Description |
 |-----------------------|--------------------------|-------------|
-| 0000 | - or   | Dash OR Blank
-| 0001 | T/U | Thymine OR Uracil
-| 0001 | A | Adenosine
-| 0100 | C | Cytosine
-| 1000 | G | Guanine
-| 0011 | W | A/T
-| 1100 | S | C/G
-| 0110 | M | A/C
-| 1001 | K | G/T
-| 1010 | R | A/G
-| 0101 | Y | C/T
-| 1101 | B | Not A
-| 1011 | D | Not C
-| 0111 | H | Not G
-| 1100 | V | Not T
-| 1111 | N | Any
-
-
-COMPARISON OF ENCODING:
-ascii-tetrad_table.png
+| 01011111 | 0000 | - | Dash
+| 00100000 | 0000 |   | Blank
+| 01010100 | 0001 | T | Thymine
+| 01010101 | 0001 | U | Uracil
+| 01000001 | 0001 | A | Adenosine
+| 01000011 | 0100 | C | Cytosine
+| 01000111 | 1000 | G | Guanine
+| 01010111 | 0011 | W | A/T
+| 01010011 | 1100 | S | C/G
+| 01001101 | 0110 | M | A/C
+| 01001011 | 1001 | K | G/T
+| 01010010 | 1010 | R | A/G
+| 01011001 | 0101 | Y | C/T
+| 01000010 | 1101 | B | Not A
+| 01000100 | 1011 | D | Not C
+| 01001000 | 0111 | H | Not G
+| 01010110 | 1100 | V | Not T
+| 01001110 | 1111 | N | Any
 
 Sequence of "ATCGATCG" would normally get encoded in ASCII as "0100000101010100010000110100011101000001010101000100001101000111" (64 bits)
 
