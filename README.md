@@ -11,23 +11,23 @@ Since each character is represented by a single byte in ASCII encoding, the size
 
 
 BINARY TETRAD ENCODING:
-Tetrad	Letter Representative Nucleotides
-1111	N
-0001	A
-0010	T
-0010	U
-0100	C
-1000	G
-0011	W A/T
-1100	S C/G
-0101	M A/C
-1010	K G/T
-1001	R A/G
-0110	Y C/T
-1110	B Not A
-1011	D Not C
-0111	H Not G
-1101	V Not T
+| Binary Tetrad (4-bit) | Representative Character | Description
+| 0000 | - or   | Dash OR Blank
+| 0001 | T/U | Thymine OR Uracil
+| 0001 | A | Adenosine
+| 0100 | C | Cytosine
+| 1000 | G | Guanine
+| 0011 | W | A/T
+| 1100 | S | C/G
+| 0110 | M | A/C
+| 1001 | K | G/T
+| 1010 | R | A/G
+| 0101 | Y | C/T
+| 1101 | B | Not A
+| 1011 | D | Not C
+| 0111 | H | Not G
+| 1100 | V | Not T
+| 1111 | N | Any
 
 
 COMPARISON OF ENCODING:
