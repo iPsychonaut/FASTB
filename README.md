@@ -40,15 +40,15 @@ Furthermore, we can then consider that each nucleotide binary tetrad consists of
 
 
 GRAPHICAL SIZE COMPARISONS:
-hundred_bp_comp.png
+![alt text](Resources/Images/hundred_bp_comp.png)
 
 Notice the file size redction is only to 2/3 the original file. This is due to the Description information taking up more data than the Sequence.
 
-thousand_bp_comp.png
+![alt text](Resources/Images/thousand_bp_comp.png)
 
 As the Sequence length increases; file size reduction can easily break 1/2 the original file size!
 
-million_bp_comp.png
+![alt text](Resources/Images/million_bp_comp.png)
 
 The longer the sequences get the closer towards compression level file sizes can be achieved.
 
