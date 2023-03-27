@@ -148,7 +148,19 @@ def fasta_check(fasta_file_path,decoded_description,final_decoded_sequence):
     sequence_diff(input_fasta_data, reconstructed_fasta, 'FASTA Data')
 
 
-def fasta_to_df_data(fasta_file_path):
+def fasta_to_df_data(fasta_file_path, compressed_output_file_path):
+    """
+    This function reads a FASTA file using Biopython's SeqIO.parse() function, converts the records to a pandas 
+    dataframe, extracts the first record from the dataframe, formats it as a FASTA file string, and returns 
+    the dataframe and the input FASTA data as a compressed BZ2 file.
+
+    Args:
+    fasta_file_path (str): The path of the input FASTA file to be read.
+    compressed_output_file_path (str): The path of the compressed output file.
+
+    Returns:
+    tuple: A tuple containing the pandas dataframe and the path of the compressed output file.
+    """
     # Read the FASTA file using Biopython's SeqIO.parse() function
     records = list(SeqIO.parse(fasta_file_path, "fasta"))
     
@@ -173,7 +185,14 @@ def fasta_to_df_data(fasta_file_path):
         if 'RNA' in description_data:
             nucleotide_type = 'RNA'
     input_fasta_data = f">{fasta_df.loc[0, 'Accession #']}{description_data}\n{nucleotide_data}"
-    return(fasta_df, input_fasta_data)
+    
+    # Compress the input FASTA data using BZ2 compression and write to the output file
+    with open(compressed_output_file_path, 'wb') as f_out:
+        with bz2.BZ2File(f_out, 'wb') as bz_out:
+            bz_out.write(bytes(input_fasta_data, 'utf-8'))
+    
+    return(fasta_df, compressed_output_file_path)
+
 
 
 ###############################################################################
