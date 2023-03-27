@@ -34,7 +34,7 @@ BINARY TETRAD ENCODING:
 
 Sequence of "TACG" would normally get encoded in ASCII as "01010100010000010100001101000111" (32 bits)
 
-With the proposed encoding the same sequence would be "0001001001001000" (16 bits)
+With the proposed Binary Tetrad encoding the same sequence would be "0001001001001000" (16 bits)
 
 Furthermore, we can then consider that each nucleotide binary tetrad consists of four values T => [0,0,0,1], which is perfectly size to be representative of pixel information (r,g,b,a). So we can then encode a single row of pixels where each value in the rgba-array holds the nucleotide information. We can then use an already small image format like PNG to reduce the file size significantly.
 
