@@ -17,7 +17,7 @@ BINARY TETRAD ENCODING:
 | 00100000 | 0000 |   | Blank
 | 01010100 | 0001 | T | Thymine
 | 01010101 | 0001 | U | Uracil
-| 01000001 | 0001 | A | Adenosine
+| 01000001 | 0010 | A | Adenosine
 | 01000011 | 0100 | C | Cytosine
 | 01000111 | 1000 | G | Guanine
 | 01010111 | 0011 | W | A/T
@@ -32,9 +32,9 @@ BINARY TETRAD ENCODING:
 | 01010110 | 1100 | V | Not T
 | 01001110 | 1111 | N | Any
 
-Sequence of "ATCGATCG" would normally get encoded in ASCII as "0100000101010100010000110100011101000001010101000100001101000111" (64 bits)
+Sequence of "TACG" would normally get encoded in ASCII as "01010100010000010100001101000111" (32 bits)
 
-With the proposed encoding the same sequence would be "00010010010010000001001001001000" (32 bits)
+With the proposed encoding the same sequence would be "0001001001001000" (16 bits)
 
 Furthermore, we can then consider that each nucleotide binary tetrad consists of four values T => [0,0,0,1], which is perfectly size to be representative of pixel information (r,g,b,a). So we can then encode a single row of pixels where each value in the rgba-array holds the nucleotide information. We can then use an already small image format like PNG to reduce the file size significantly.
 
