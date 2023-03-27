@@ -2,18 +2,7 @@
 """
 Module for de/encoding nucleotide sequences into tetrabinary strings
 
-Author: ian.michael.bollinger@gmail.com
-
-Functions:
-
-Arguments:
-
-Raises:
-
-Returns:
-
-Example Usage:
-    
+Author: ian.michael.bollinger@gmail.com    
 """
 # Import Libraries and Set Globals
 from PIL import Image
@@ -331,7 +320,8 @@ def png_encode(fasta_file_path):
         tuple: A tuple containing the path to the output PNG file and the nucleotide sequence from the input FASTA file.
     """
     # Create the path to the output PNG file
-    png_file_path = fasta_file_path.replace('.fasta', '.png')
+    fasta_name = fasta_file_path.split('/')[-1].replace('.','-')
+    png_file_path = fasta_file_path.replace('.fasta', '.png').replace('FASTA FILES',f'OUTPUT FILES/{fasta_name}/') #png_file_path = fasta_file_path.replace('.fasta', '.png')
     
     # Encode the FASTA file using TTB encoding
     final_encoded_string, nucleotide_sequence = fasta_encode(fasta_file_path)
@@ -455,41 +445,20 @@ def reconstruct_fasta(decoded_description, nucleotide_type, final_decoded_sequen
     reconstructed_fasta = f'>{decoded_description} {nucleotide_type}\n{final_decoded_sequence}'
     return(reconstructed_fasta)
 
-
-def fasta_check(fasta_file_path,decoded_description,final_decoded_sequence):
-    """
-    Check if the reconstructed FASTA-formatted string matches the original FASTA file.
-
-    Args:
-        fasta_file_path (str): Path to the original FASTA file.
-        decoded_description (str): The decoded description.
-        final_decoded_sequence (str): The final decoded sequence.
-
-    Returns:
-        None.
-    """
-    with open(fasta_file_path, 'r') as f:
-        raw_fasta=f.read()
-    
-    # Format the decoded sequence for comparison with the original FASTA data
-    structured_decoded_sequence =  ""
-    for i in range(0, len(final_decoded_sequence), 70):
-        structured_decoded_sequence += final_decoded_sequence[i:i+70] + '\n'
-        
-    reconstructed_fasta = f'>{decoded_description}\n{structured_decoded_sequence[:-1]}'
-        
-    # Check if the reconstructed FASTA-formatted string matches the original FASTA data
-    sequence_diff(raw_fasta, reconstructed_fasta, 'FASTA Data')
  
 # Debug & Example Area
-if __name__ == '__main__':
-
-    # Get current working directory
-    working_directory = os.getcwd()
-    
+if __name__ == '__main__':    
+    working_directory = 'C:/Users/theda/OneDrive/Documents/Python/TetraBin-Nucleotide-Encoding'
     # Set fasta file path
-    fasta_file_path = f'{working_directory}/FASTA FILES/AY281023.1.fasta'
-    
+    fasta_file_path = f'{working_directory}/Resources/FASTA FILES/AY281023.1.fasta'
+    fasta_name = fasta_file_path.split('/')[-1]
+    fasta_path = fasta_file_path.strip(fasta_name)
+
+    temp_fasta_name = fasta_name.replace('.','-')
+    fasta_folder_path = fasta_path.replace('FASTA FILES','OUTPUT FILES') + temp_fasta_name
+    if not os.path.exists(fasta_folder_path):
+        os.makedirs(fasta_folder_path)
+       
     # Encode FASTA to PNG
     final_encoded_string, nucleotide_sequence = fasta_encode(fasta_file_path)
         
@@ -504,9 +473,6 @@ if __name__ == '__main__':
     
     # Compare original and decoded nucleotide sequence
     sequence_diff(nucleotide_sequence, final_decoded_sequence, 'Nucleotide Sequence')
-    
-    # Verify reconstructed FASTA from PNG
-    fasta_check(fasta_file_path,decoded_description,final_decoded_sequence)
     
     # Encode and Decode using BitArrays
     with open(fasta_file_path, 'r') as f:
