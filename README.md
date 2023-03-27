@@ -11,7 +11,8 @@ Since each character is represented by a single byte in ASCII encoding, the size
 
 
 BINARY TETRAD ENCODING:
-| Binary Tetrad (4-bit) | Representative Character | Description
+| Binary Tetrad (4-bit) | Representative Character | Description |
+|-----------------------|--------------------------|-------------|
 | 0000 | - or   | Dash OR Blank
 | 0001 | T/U | Thymine OR Uracil
 | 0001 | A | Adenosine
