@@ -1,5 +1,5 @@
 # TetraBin-Nucleotide-Encoding
-A method for compressing FASTA files (or other Nucleotide raw data) into a more size efficient file
+A method for encoding data from FASTA files (or other Nucleotide raw data) into a more size efficient file
 
 
 FASTA FILE ENCODING - ASCII:
