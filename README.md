@@ -1,4 +1,4 @@
-# TetraBin-Nucleotide-Encoding
+# Nucleotide-Binary-Tetrad-Encoding
 A method for encoding data from FASTA files (or other Nucleotide raw data) into a more size efficient file
 
 
