@@ -54,10 +54,6 @@ The longer the sequences get the closer towards compression level file sizes can
 
 
 AREAS OF EXPANSION (WIP):
-    .md5 checksums
-
-
-FILE DESCRIPTIONS (WIP):
-    .fasta a 2 line file 1)Header, 2) Sequence
-    .fastq (Illumina), .fasta with ascii codes phred32/phred64 base calling meta-quality-data with spacer lines, a 4 line file 1) Header, 2) Quality, 3) Bases, 4) Spacer Line
-    .fast5 (Nanopore), .fastq with pore data There are 3 main branches of data stored in the fast
+.fasta a 2 line file 1)Header, 2) Sequence
+.fastq (Illumina), .fasta with ascii codes phred32/phred64 base calling meta-quality-data with spacer lines, a 4 line file 1) Header, 2) Quality, 3) Bases, 4) Spacer Line
+.fast5 (Nanopore), .fastq with pore data There are 3 main branches of data stored in the fast
