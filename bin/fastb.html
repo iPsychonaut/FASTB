@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    Project:   FASTB Web Editor — Critical Consulting
+    Purpose:   Client-side FASTA↔FASTB converter/editor with integrity guards and live diagnostics.
+    Scope:     Single-page app; no external deps; runs fully in the browser.
+    Version:   2.0.0
+    Build:     2025-08-09T00:00:00Z
+    Owner:     Critical Consulting (contact: researchconsultants@critical.consulting)
+    Author:    Ian Michael Bollinger
+    License:   © Critical Consulting. All rights reserved. Internal tooling demo. (or MIT/Apache-2.0 if open)
+    Dependencies: None; modern evergreen browsers (Chromium/Firefox/Safari).
+    Data Flow: Files read via File API; processed entirely in-memory; never uploaded.
+    Security:  No network requests. Consider embedding under a CSP if hosted outside Wix:
+               default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none';
+    Testing:   Manual sanity: load sample FASTA/FASTB; encode/decode round-trips; diagnostics show no issues.
+               Edge-cases: UTF-8 BOM; ';' FASTA comments; leading spaces before '>'; multi-record files.
+    Change Log:
+      - 2.0.0: Add FASTB v2 container (TLV + CRC32), auto-detect v2 on import, default export to v2; keep v1 decode for legacy.
+      - 1.1.0: Add ISO-style header, ARIA labels, JSDoc comments; dark brand theme; robustness in FASTA parsing.
+      - 1.0.0: Initial release with diagnostics & live stats.
+  -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Client-side FASTA ↔ FASTB converter/editor with data integrity checks. Dark theme matching Critical Consulting brand." />
+  <title>FASTB Web Editor — Critical Consulting</title>
+
+  <style>
+    /* ===== Critical Consulting Dark Theme (centralized tokens) ===== */
+    :root{
+      --bg:#262626;      /* main background */
+      --bg-2:#1f1f1f;    /* cards / editor */
+      --bg-3:#2b2b2b;    /* table headers */
+      --text:#ffffff;    /* primary text */
+      --muted:#cfcfcf;   /* secondary text */
+      --border:#3a3a3a;  /* borders/dividers */
+
+      /* Brand accents */
+      --green:#8CBF3F;   /* primary accent */
+      --lime:#D3D925;    /* neon lime headings / FASTB load btn */
+      --gold:#D9A918;    /* gold accent / Save .fastb btn */
+      --orange:#D9663D;  /* warning/accent orange (Download .fasta) */
+
+      --chip-bg:#313131;
+      --chip-border:#454545;
+      --shadow:0 0 0 1px var(--border);
+      --radius:12px;
+    }
+
+    * { box-sizing: border-box }
+    html,body{height:100%}
+    body{
+      margin:0; background:var(--bg); color:var(--text);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,sans-serif;
+    }
+
+    header{ padding:16px 20px; border-bottom:1px solid var(--border);
+      background:linear-gradient(180deg,#2e2e2e 0%, var(--bg) 100%); }
+    h1{ margin:0; font-size:20px; color:var(--lime); letter-spacing:.3px }
+    .wrap{ max-width:1280px; margin:0 auto; padding:18px }
+
+    .bar{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px }
+    .btn{
+      padding:10px 14px; border-radius:var(--radius); font-weight:600; cursor:pointer;
+      border:1px solid var(--green); color:#0b1403; background:var(--green);
+    }
+    .btn:hover{ filter:brightness(1.05) }
+    .btn:active{ transform:translateY(1px) }
+    .btn.warn{ border-color:var(--orange); background:var(--orange); color:#1b0a06 }
+    .btn.ghost{ background:transparent; color:var(--text); border:1px solid var(--border) }
+
+    /* === Brand-specific button overrides requested === */
+    #btnLoadFASTB{
+      background: var(--lime);       /* #D3D925 */
+      border-color: var(--lime);
+      color: #262626;                /* dark text for contrast */
+    }
+    #btnLoadFASTB:hover { filter: brightness(1.05) }
+
+    #toFASTB{
+      background: var(--gold);       /* #D9A918 */
+      border-color: var(--gold);
+      color: #262626;                /* dark text for contrast */
+    }
+    #toFASTB:hover { filter: brightness(1.05) }
+
+    input[type=file]{ display:none }
+    label.btn{ display:inline-block }
+
+    .row{ display:grid; grid-template-columns:1fr 420px; gap:12px }
+    @media (max-width:1100px){ .row{ grid-template-columns:1fr } }
+
+    .card{ border:1px solid var(--border); border-radius:var(--radius);
+      background:var(--bg-2); box-shadow:var(--shadow); padding:10px }
+
+    textarea{
+      width:100%; height:460px; padding:12px; border-radius:var(--radius);
+      background:var(--bg-2); color:var(--text); border:1px solid var(--border);
+      font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.38;
+    }
+    textarea::selection{ background:rgba(140,191,63,.35) }
+
+    .small{ font-size:12px; color:var(--muted); margin-top:6px }
+    .log{
+      white-space:pre-wrap; border:1px solid var(--border); border-radius:var(--radius);
+      padding:10px; background:#2a2a2a; color:#e9e9e9; max-height:160px; overflow:auto;
+    }
+    .divider{ height:1px; background:var(--border); margin:12px 0 }
+    .pill{ display:inline-block; padding:2px 8px; border-radius:999px; background:#2a2a2a;
+      border:1px solid var(--border); font-size:12px; margin-left:6px; color:var(--lime) }
+
+    .rightcol{ display:flex; flex-direction:column; gap:12px }
+    .chips{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 }
+    .chip{ background:var(--chip-bg); border:1px solid var(--chip-border);
+      border-radius:999px; padding:2px 8px; font-size:12px; color:var(--text) }
+    .chip.ok{ color:#d9fff0; border-color:#1e4f3f; background:#0f2a21 }
+    .chip.warn{ color:#fff2e6; border-color:#6a361f; background:#2a1a14 }
+
+    table{ width:100%; border-collapse:collapse; font-size:12px }
+    th,td{ border-bottom:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top }
+    th{ background:var(--bg-3); color:#e9e9e9; position:sticky; top:0 }
+    .muted{ color:var(--muted) }
+    .ok{ color:#9CF0C7; font-weight:600 }
+    .warn{ color:#D9663D; font-weight:600 }
+    .err{ color:#ffb4b4; font-weight:600 }
+
+    .drop-hint{ border:1px dashed var(--gold); border-radius:8px; padding:6px; margin-top:8px;
+      font-size:12px; color:var(--muted) }
+    .dz-on{ outline:2px dashed var(--lime); outline-offset:4px }
+
+    a{ color:var(--lime) }
+  </style>
+</head>
+<body>
+<header role="banner" aria-label="FASTB Web Editor header">
+  <h1>FASTB Web Editor <span class="pill">encoder/decoder</span></h1>
+</header>
+
+<main class="wrap" role="main">
+  <section class="bar" aria-label="File operations">
+    <label class="btn" aria-label="Load FASTA file">
+      Load FASTA
+      <input id="inFASTA" type="file" accept=".fasta,.fa,.txt" aria-label="Choose FASTA file" />
+    </label>
+    <label class="btn" id="btnLoadFASTB" aria-label="Load FASTB file">
+      Load FASTB
+      <input id="inFASTB" type="file" accept=".fastb,.fastb2,.fbx" aria-label="Choose FASTB file" />
+    </label>
+    <button class="btn" id="toFASTB" type="button" aria-label="Save as FASTB">Save as .fastb</button>
+    <button class="btn warn" id="toFASTA" type="button" aria-label="Download FASTA">Download .fasta</button>
+    <button class="btn ghost" id="clear" type="button" aria-label="Clear editor">Clear</button>
+  </section>
+
+  <section class="row" aria-label="Editor and diagnostics">
+    <div>
+      <div class="card" aria-labelledby="editorTitle">
+        <h2 id="editorTitle" style="margin:6px 0 8px; color:var(--gold)">Editor (FASTA-style)</h2>
+        <label for="editor" class="small muted">Editable FASTA content</label>
+        <textarea id="editor" spellcheck="false" aria-describedby="editorHelp" placeholder=">My sequence
+ACGTACGT..."></textarea>
+        <div id="editorHelp" class="small">
+          • Headers start with <code>&gt;</code>. Multiple records allowed. <br />
+          • Sequence lines: A/C/G/T/U/N (degenerate IUPAC codes also supported). <br />
+          • Tip: drag & drop a <code>.fasta</code> or <code>.fastb</code>/<code>.fastb2</code> file onto the editor.
+        </div>
+        <div id="dropHint" class="drop-hint" aria-hidden="true">Drop FASTA/FASTB files here to load.</div>
+      </div>
+
+      <div class="card" style="margin-top:12px;" aria-labelledby="logTitle">
+        <h2 id="logTitle" style="margin:6px 0 8px; color:var(--gold)">Log</h2>
+        <div id="log" class="log" role="region" aria-live="polite"></div>
+        <div class="divider"></div>
+        <h3 style="margin:6px 0 8px; color:var(--gold)">Status</h3>
+        <div id="status" class="small" aria-live="polite">Ready.</div>
+      </div>
+    </div>
+
+    <aside class="rightcol" aria-label="Diagnostics and statistics">
+      <div class="card" aria-labelledby="diagTitle">
+        <h2 id="diagTitle" style="margin:6px 0 8px; color:var(--lime)">Diagnostics (triplicate markers)</h2>
+        <div id="diagSummary" class="chips"></div>
+        <div class="divider"></div>
+        <p class="small muted">We flag any triplicate of a type spacer or NEXT terminator inside an encoded sequence — those would corrupt boundaries.</p>
+        <div class="divider"></div>
+        <div id="diagTableWrap" role="region" aria-live="polite"></div>
+      </div>
+
+      <div class="card" aria-labelledby="statsTitle">
+        <h2 id="statsTitle" style="margin:6px 0 8px; color:var(--lime)">Live Stats</h2>
+        <div id="statsOverall" class="chips"></div>
+        <div class="divider"></div>
+        <div id="statsTableWrap" role="region" aria-live="polite"></div>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<script>
+/** @const {string} APP_VERSION - Semantic version of this app. */
+const APP_VERSION = "2.0.0";
+/** @const {string} APP_BUILD_DATE - ISO-8601 UTC build timestamp. */
+const APP_BUILD_DATE = "2025-08-09T00:00:00Z";
+
+/* ==== FASTB v1 (legacy) tetrabin constants (business rules) ==== */
+const TETRA = {
+  "U":"0100","T":"0100","A":"1000","C":"0010","G":"0001",
+  "R":"1001","Y":"0110","K":"0101","M":"1010","S":"0011",
+  "W":"1100","B":"0111","D":"1101","H":"1110","V":"1011",
+  "N":"1111"," ":"0000"
+};
+const INV = (() => { const m={}; for (const [k,v] of Object.entries(TETRA)) m[v]=k; return m; })();
+const SPACER_DNA = "000011110000";
+const SPACER_RNA = "111100001111";
+const NEXT = "000000001111";
+
+/* ==== FASTB v2 (container) constants ==== */
+const V2_MAGIC = [0x46,0x41,0x53,0x54]; // "FAST"
+const V2_VER = 0x02;
+const V2_FLAGS = 0x00; // reserved
+// TLV types
+const TLV_DESC_UTF8 = 0x01;
+const TLV_NUC_TYPE  = 0x02; // 'D' or 'R'
+const TLV_SEQ_4B    = 0x03; // length = number of nibbles; payload packed (2 nibbles/byte)
+const TLV_END       = 0xFE; // length 0, marks end of TLVs before CRC32
+
+/* ===== Utilities (bytes, CRC32, UTF-8) ===== */
+function utf8Encode(s){ return new TextEncoder().encode(s); }
+function utf8Decode(u8){ return new TextDecoder().decode(u8); }
+
+function bytesToBitString(u8){ let s=""; for (let i=0;i<u8.length;i++) s+=u8[i].toString(2).padStart(8,"0"); return s; }
+function bitStringToBytes(bits){
+  const pad=(8-(bits.length%8))%8; if(pad) bits+="0".repeat(pad);
+  const out=new Uint8Array(bits.length/8);
+  for(let i=0,j=0;i<bits.length;i+=8,j++) out[j]=parseInt(bits.slice(i,i+8),2);
+  return out;
+}
+
+// Little-endian writers
+function pushU32(arr, n){ arr.push(n&0xFF, (n>>>8)&0xFF, (n>>>16)&0xFF, (n>>>24)&0xFF); }
+function pushU16(arr, n){ arr.push(n&0xFF, (n>>>8)&0xFF); }
+
+// CRC32 (IEEE) with precomputed table
+const CRC32_TABLE = (()=>{ let t=new Uint32Array(256);
+  for(let i=0;i<256;i++){ let c=i; for(let k=0;k<8;k++){ c = (c&1)? (0xEDB88320 ^ (c>>>1)) : (c>>>1); } t[i]=c>>>0; }
+  return t;
+})();
+function crc32(bytes){
+  let c=0xFFFFFFFF>>>0;
+  for(let i=0;i<bytes.length;i++){ const b=bytes[i]; c = CRC32_TABLE[(c^b)&0xFF] ^ (c>>>8); }
+  return (c ^ 0xFFFFFFFF)>>>0;
+}
+
+/* ===== FASTA helpers (unchanged) ===== */
+/**
+ * Parse FASTA text into records.
+ * - Strips BOM; trims lines; ignores ';' comments; allows leading spaces before '>'.
+ * - Throws on missing records or empty sequences.
+ * @param {string} text
+ * @return {{desc:string,seq:string}[]}
+ * @throws {Error} on invalid content
+ */
+function parseFASTA(text){
+  text=text.replace(/\r/g,"");
+  if (text.length && text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+  const lines=text.split("\n"); const out=[]; let desc=null, seq=[];
+  const flush=()=>{ if(desc!==null){ const s=seq.join("").replace(/\s+/g,"").toUpperCase();
+    if(!s.length) throw new Error(`Empty sequence for record: ${desc}`); out.push({desc,seq:s}); } desc=null; seq=[]; };
+  for(let raw of lines){
+    const line=raw.trim(); if(!line) continue; if(line.startsWith(";")) continue;
+    const m=line.match(/^>\s*(.*)$/); if(m){ flush(); desc=m[1].trim(); continue; }
+    seq.push(line);
+  }
+  flush(); if(out.length===0) throw new Error("No FASTA records found. Ensure headers start with '>' and sequences follow.");
+  return out;
+}
+
+/**
+ * Build FASTA text from records.
+ * @param {{desc:string,seq:string,nuc?:string}[]} records
+ * @param {number=} wrap
+ * @return {string}
+ */
+function buildFASTA(records, wrap=80){
+  const parts=[]; for(const {desc,seq,nuc} of records){
+    parts.push(">"+desc+(nuc?` | NUC=${nuc}`:""));
+    for(let i=0;i<seq.length;i+=wrap) parts.push(seq.slice(i,i+wrap));
+    parts.push("");
+  } return parts.join("\n").trim()+"\n";
+}
+
+/* ===== v1 encoder/decoder (legacy) ===== */
+/**
+ * Encode one record to a v1 bitstring with triplicate-marker guard.
+ * @param {string} desc
+ * @param {string} seq
+ * @return {string} bitstring
+ * @throws {Error} invalid base or triplicate marker present
+ */
+function encodeRecordBits_v1(desc, seq){
+  const cleaned=(seq||"").toUpperCase().replace(/\s+/g,"");
+  const nuc=cleaned.includes("U")?"RNA":"DNA";
+  const typeSpacer=nuc==="RNA"?SPACER_RNA:SPACER_DNA;
+
+  let seqBits=""; for(let i=0;i<cleaned.length;i++){
+    const b=TETRA[cleaned[i]];
+    if(!b) throw new Error(`Invalid nucleotide '${cleaned[i]}' at position ${i+1}`);
+    seqBits+=b;
+  }
+  const guards={DNA:SPACER_DNA.repeat(3), RNA:SPACER_RNA.repeat(3), NEXT:NEXT.repeat(3)};
+  for (const [label,patt] of Object.entries(guards)){
+    const pos=seqBits.indexOf(patt);
+    if(pos!==-1){ const nt=Math.floor(pos/4); throw new Error(`Triplicate FASTB marker '${label}' at bit ${pos} (nt ${nt}).`); }
+  }
+  const descBits=bytesToBitString(utf8Encode(desc));
+  return descBits + typeSpacer + seqBits + NEXT;
+}
+
+/** v1: Decode a FASTB byte array into records. */
+function decodeFASTB_v1(u8){
+  const bitstr=bytesToBitString(u8);
+  function findTypeSpacer(s,start=0){
+    const d=s.indexOf(SPACER_DNA,start), r=s.indexOf(SPACER_RNA,start);
+    if(d===-1 && r===-1) return {idx:-1, tag:null};
+    if(d===-1) return {idx:r, tag:"RNA"}; if(r===-1) return {idx:d, tag:"DNA"};
+    return d<r?{idx:d, tag:"DNA"}:{idx:r, tag:"RNA"};
+  }
+  const records=[]; let cursor=0;
+  while(cursor<bitstr.length){
+    const {idx,tag}=findTypeSpacer(bitstr,cursor); if(idx===-1) break;
+    const prefix=bitstr.slice(cursor,idx); // description as 8-bit units
+    let desc=""; for(let i=0;i+8<=prefix.length;i+=8) desc+=String.fromCharCode(parseInt(prefix.slice(i,i+8),2));
+    const after=idx+(tag==="DNA"?SPACER_DNA.length:SPACER_RNA.length);
+    const nidx=bitstr.indexOf(NEXT,after); if(nidx===-1) throw new Error("Record missing NEXT terminator.");
+    const coded=bitstr.slice(after,nidx);
+    let seq=""; for(let i=0;i+4<=coded.length;i+=4){ const nib=coded.slice(i,i+4), base=INV[nib]; if(!base) throw new Error(`Invalid tetrabin nibble '${nib}'`); seq+=base; }
+    if(tag==="RNA") seq=seq.replaceAll("T","U");
+    records.push({desc,seq,nuc:tag}); cursor=nidx+NEXT.length;
+  }
+  return records;
+}
+
+/** v1: Encode multiple FASTA records into FASTB bytes. */
+function encodeFASTB_fromFASTA_v1(text){
+  const recs=parseFASTA(text); let bits=""; for(const r of recs) bits+=encodeRecordBits_v1(r.desc,r.seq);
+  return bitStringToBytes(bits);
+}
+
+/* ===== v2 encoder/decoder (preferred) ===== */
+
+/** Pack sequence into 4-bit nibbles (two bases per byte). */
+function packSeq4b(seq){
+  const map = {U:0x4,T:0x4,A:0x8,C:0x2,G:0x1,R:0x9,Y:0x6,K:0x5,M:0xA,S:0x3,W:0xC,B:0x7,D:0xD,H:0xE,V:0xB,N:0xF," ":0x0};
+  const s = (seq||"").toUpperCase().replace(/\s+/g,"");
+  const n = s.length, out = new Uint8Array((n+1)>>1);
+  for (let i=0;i<n;i++){
+    const ch=s[i]; const nib = map[ch];
+    if (nib===undefined) throw new Error(`Invalid nucleotide '${ch}' at position ${i+1}`);
+    const bi = i>>1;
+    if ((i&1)===0) out[bi] = (nib<<4); else out[bi] |= nib;
+  }
+  return {bytes: out, nibCount: n};
+}
+
+/** Unpack 4-bit nibbles back to sequence. */
+function unpackSeq4b(bytes, nibCount, nucType){
+  const inv = {0x4:"T",0x8:"A",0x2:"C",0x1:"G",0x9:"R",0x6:"Y",0x5:"K",0xA:"M",0x3:"S",0xC:"W",0x7:"B",0xD:"D",0xE:"H",0xB:"V",0xF:"N",0x0:" "};
+  let out=""; for(let i=0;i<nibCount;i++){
+    const b=bytes[i>>1]; const nib = (i&1)===0 ? (b>>4) : (b&0xF);
+    const base = inv[nib]; if (base===undefined) throw new Error(`Invalid nibble 0x${nib.toString(16)}`);
+    out += base;
+  }
+  return (nucType==="R") ? out.replaceAll("T","U") : out;
+}
+
+/** Build a v2 file from FASTA text (preferred). */
+function encodeFASTB_fromFASTA_v2(text){
+  const recs=parseFASTA(text);
+
+  // Header: MAGIC(4) VER(1) FLAGS(1) RESERVED(2) COUNT(4)
+  const bytes = [];
+  bytes.push(...V2_MAGIC);
+  bytes.push(V2_VER);
+  bytes.push(V2_FLAGS);
+  pushU16(bytes, 0);                 // reserved
+  pushU32(bytes, recs.length);       // record count
+
+  for (const r of recs){
+    const descBytes = utf8Encode(r.desc);
+    const nuc = (r.seq.includes("U") ? "R" : "D").charCodeAt(0);
+    const {bytes: seqBytes, nibCount} = packSeq4b(r.seq);
+
+    // Collect TLVs for CRC
+    const tlv = [];
+    // DESC_UTF8
+    tlv.push(TLV_DESC_UTF8); pushU32(tlv, descBytes.length); tlv.push(...descBytes);
+    // NUC_TYPE
+    tlv.push(TLV_NUC_TYPE);  pushU32(tlv, 1); tlv.push(nuc);
+    // SEQ_4B
+    tlv.push(TLV_SEQ_4B);    pushU32(tlv, nibCount); tlv.push(...seqBytes);
+    // END
+    tlv.push(TLV_END);       pushU32(tlv, 0);
+
+    // CRC32 over TLV bytes
+    const crc = crc32(new Uint8Array(tlv)) >>> 0;
+
+    // Append TLVs then CRC
+    bytes.push(...tlv);
+    pushU32(bytes, crc);
+  }
+
+  return new Uint8Array(bytes);
+}
+
+/** Decode FASTB v2 (zero-copy; fast). Throws on CRC mismatch or malformed TLVs. */
+function decodeFASTB_v2(u8){
+  if (u8.length < 12) throw new Error("FASTB v2: header too short");
+  // MAGIC "FAST"
+  if (!(u8[0]===0x46 && u8[1]===0x41 && u8[2]===0x53 && u8[3]===0x54)) {
+    throw new Error("Not FASTB v2 (magic mismatch)");
+  }
+  const ver = u8[4]; if (ver!==V2_VER) throw new Error(`Unsupported FASTB version ${ver}`);
+  const count = u8[8] | (u8[9]<<8) | (u8[10]<<16) | (u8[11]<<24);
+
+  let off = 12;
+  const records = [];
+
+  for (let ri=0; ri<count; ri++){
+    const tlvStart = off;  // start of TLVs (for CRC slice)
+    let desc = "", nuc = null, seqBytes = null, nibCount = 0;
+
+    while (true){
+      if (off + 5 > u8.length) throw new Error("FASTB v2: truncated TLV header");
+      const t = u8[off];
+      const L = u8[off+1] | (u8[off+2]<<8) | (u8[off+3]<<16) | (u8[off+4]<<24);
+      off += 5;
+
+      if (t === TLV_END){
+        if (L !== 0) throw new Error("FASTB v2: END TLV must have length 0");
+        break;
+      }
+
+      let payLen = L;
+      if (t === TLV_SEQ_4B) payLen = Math.ceil(L / 2);
+
+      if (off + payLen > u8.length) throw new Error("FASTB v2: truncated TLV payload");
+      const payload = u8.subarray(off, off + payLen);
+      off += payLen;
+
+      if (t === TLV_DESC_UTF8){
+        desc = utf8Decode(payload);
+      } else if (t === TLV_NUC_TYPE){
+        if (payload.length !== 1) throw new Error("FASTB v2: NUC_TYPE length != 1");
+        const c = String.fromCharCode(payload[0]);
+        nuc = (c === "R" ? "RNA" : c === "D" ? "DNA" : null);
+      } else if (t === TLV_SEQ_4B){
+        seqBytes = payload;
+        nibCount = L;
+      } else {
+        // Unknown TLV -> skip (extensible)
+      }
+    }
+
+    // CRC32 is immediately after TLVs
+    if (off + 4 > u8.length) throw new Error("FASTB v2: missing CRC32");
+    const crcRead = u8[off] | (u8[off+1]<<8) | (u8[off+2]<<16) | (u8[off+3]<<24);
+    const crcCalc = crc32(u8.subarray(tlvStart, off)) >>> 0; // zero-copy slice
+    off += 4;
+
+    if (crcCalc !== crcRead) {
+      throw new Error(`FASTB v2: CRC mismatch (got 0x${crcRead.toString(16)}, want 0x${crcCalc.toString(16)})`);
+    }
+    if (!desc || !nuc || seqBytes==null) throw new Error("FASTB v2: missing required TLVs");
+
+    const nucCode = (nuc==="RNA") ? "R" : "D";
+    const seq = unpackSeq4b(seqBytes, nibCount, nucCode);
+    records.push({desc, seq, nuc});
+  }
+  return records;
+}
+
+/** Wrapper: decode FASTB (auto-detect v2, else legacy v1). */
+function decodeFASTB(u8){
+  if (u8.length >= 5 && u8[0]===0x46 && u8[1]===0x41 && u8[2]===0x53 && u8[3]===0x54 && u8[4]===V2_VER){
+    return decodeFASTB_v2(u8);
+  }
+  // Fallback to legacy v1
+  return decodeFASTB_v1(u8);
+}
+
+/* ===== Diagnostics + Stats (unchanged) ===== */
+
+/**
+ * Scan for triplicate markers and invalid bases.
+ * @param {string} fastaText
+ * @return {{error:string|null, rows:Array, counts:{issues:number,records:number}}}
+ */
+function scanTriplicateDiagnostics(fastaText){
+  let recs=[]; try{ recs=parseFASTA(fastaText); }catch(e){ return {error:e.message, rows:[], counts:{issues:0, records:0}}; }
+  const guards={DNA:SPACER_DNA.repeat(3), RNA:SPACER_RNA.repeat(3), NEXT:NEXT.repeat(3)};
+  const rows=[];
+  for(let i=0;i<recs.length;i++){
+    const r=recs[i]; const cleaned=r.seq.toUpperCase().replace(/\s+/g,"");
+    let seqBits=""; let bad=null;
+    for(let k=0;k<cleaned.length;k++){ const b=TETRA[cleaned[k]]; if(!b){ bad=`Invalid '${cleaned[k]}' at ${k+1}`; break; } seqBits+=b; }
+    if(bad){ rows.push({rec:i+1, desc:r.desc, issue:"Invalid base", detail:bad}); continue; }
+    for(const [label,patt] of Object.entries(guards)){
+      let pos=seqBits.indexOf(patt);
+      while(pos!==-1){ rows.push({rec:i+1, desc:r.desc, issue:`Triplicate ${label}`, detail:`bit ${pos} (nt ${Math.floor(pos/4)})`}); pos=seqBits.indexOf(patt,pos+1); }
+    }
+  }
+  return {error:null, rows, counts:{issues:rows.length, records:recs.length}};
+}
+
+/**
+ * Compute per-record and overall base stats.
+ * GC% formula (DNA only): (G+C)/(A+C+G+T)×100.
+ * @param {string} fastaText
+ * @return {{error:string|null, overall:Object, per:Array}}
+ */
+function computeStats(fastaText){
+  let recs=[]; try{ recs=parseFASTA(fastaText); }catch(e){ return {error:e.message, overall:null, per:[]}; }
+  const per=[]; let A=0,C=0,G=0,T=0,U=0,N=0,O=0,tot=0;
+  for(let i=0;i<recs.length;i++){
+    const {desc,seq}=recs[i]; const s=seq.toUpperCase(); const nuc=s.includes("U")?"RNA":"DNA";
+    let a=0,c=0,g=0,t=0,u=0,n=0,o=0; for(let j=0;j<s.length;j++){
+      const ch=s[j]; if(ch==="A")a++; else if(ch==="C")c++; else if(ch==="G")g++; else if(ch==="T")t++; else if(ch==="U")u++; else if(ch==="N")n++; else o++;
+    }
+    const len=s.length; A+=a; C+=c; G+=g; T+=t; U+=u; N+=n; O+=o; tot+=len;
+    const denom=a+c+g+t; const gc=denom?((g+c)/denom*100):0;
+    per.push({idx:i+1, desc, nuc, len, A:a,C:c,G:g,T:t,U:u,N:n,Other:o, gc});
+  }
+  const denomTot=A+C+G+T; const gcTot=denomTot?((G+C)/denomTot*100):0;
+  return {error:null, overall:{records:recs.length,bases:tot,gc:gcTot.toFixed(2),counts:{A,C,G,T,U,N,Other:O}}, per};
+}
+
+/* ===== UI logic (unchanged except: decode auto-detect; encode uses v2) ===== */
+const elEditor=document.getElementById("editor");
+const elLog=document.getElementById("log");
+const elStatus=document.getElementById("status");
+const elDiagSummary=document.getElementById("diagSummary");
+const elDiagTableWrap=document.getElementById("diagTableWrap");
+const elStatsOverall=document.getElementById("statsOverall");
+const elStatsTableWrap=document.getElementById("statsTableWrap");
+
+/** Last loaded filename for save naming (ISO: transparent data handling) */
+let loadedFileName = null;
+
+function log(msg){ elLog.textContent += (msg + "\n"); elLog.scrollTop = elLog.scrollHeight; }
+function status(msg){ elStatus.textContent = msg; }
+
+/** Render diagnostics panel. @param {*} diag */
+function renderDiag(diag){
+  elDiagSummary.innerHTML="";
+  if(diag.error){ elDiagSummary.innerHTML=`<span class="chip warn">Parse error: ${diag.error}</span>`; elDiagTableWrap.innerHTML=""; return; }
+  const chips=[`<span class="chip">Records: ${diag.counts.records}</span>`];
+  chips.push(diag.counts.issues===0?`<span class="chip ok">No issues</span>`:`<span class="chip warn">Issues: ${diag.counts.issues}</span>`);
+  elDiagSummary.innerHTML=chips.join("");
+  if(diag.rows.length===0){ elDiagTableWrap.innerHTML=`<div class="small muted">No triplicate markers detected.</div>`; return; }
+  let html=`<div style="overflow:auto;max-height:220px"><table>
+  <thead><tr><th>#</th><th>Description</th><th>Issue</th><th>Detail</th></tr></thead><tbody>`;
+  for(const r of diag.rows){ html+=`<tr><td>${r.rec}</td><td class="muted" title="${r.desc}">${r.desc}</td><td class="warn">${r.issue}</td><td>${r.detail}</td></tr>`; }
+  html+=`</tbody></table></div>`; elDiagTableWrap.innerHTML=html;
+}
+
+/** Render statistics panel. @param {*} st */
+function renderStats(st){
+  elStatsOverall.innerHTML="";
+  if(st.error){ elStatsOverall.innerHTML=`<span class="chip warn">Parse error: ${st.error}</span>`; elStatsTableWrap.innerHTML=""; return; }
+  const o=st.overall;
+  const chips=[`<span class="chip">Records: ${o.records}</span>`,`<span class="chip">Bases: ${o.bases}</span>`,`<span class="chip">GC%: ${o.gc}</span>`,
+               `<span class="chip">A:${o.counts.A}</span>`,`<span class="chip">C:${o.counts.C}</span>`,`<span class="chip">G:${o.counts.G}</span>`,
+               `<span class="chip">T:${o.counts.T}</span>`,`<span class="chip">U:${o.counts.U}</span>`,`<span class="chip">N:${o.counts.N}</span>`];
+  elStatsOverall.innerHTML=chips.join("");
+  let html=`<div style="overflow:auto;max-height:260px"><table>
+    <thead><tr><th>#</th><th>Description</th><th>Type</th><th>Len</th><th>A</th><th>C</th><th>G</th><th>T</th><th>U</th><th>N</th><th>Other</th><th>GC%</th></tr></thead><tbody>`;
+  for(const r of st.per){
+    html+=`<tr><td>${r.idx}</td><td class="muted" title="${r.desc}">${r.desc}</td><td>${r.nuc}</td><td>${r.len}</td>
+    <td>${r.A}</td><td>${r.C}</td><td>${r.G}</td><td>${r.T}</td><td>${r.U}</td><td>${r.N}</td><td>${r.Other}</td><td>${(r.gc).toFixed(2)}</td></tr>`;
+  }
+  html+=`</tbody></table></div>`; elStatsTableWrap.innerHTML=html;
+}
+
+/** Recalculate diagnostics and stats from editor text. */
+function recalcPanels(){ const t=elEditor.value; renderDiag(scanTriplicateDiagnostics(t)); renderStats(computeStats(t)); }
+
+/** Debounce utility. @param {Function} fn @param {number=} ms @return {Function} */
+const debounce=(fn,ms=250)=>{ let h; return (...a)=>{ clearTimeout(h); h=setTimeout(()=>fn(...a),ms); }; };
+const recalcDebounced=debounce(recalcPanels,250);
+
+/* Buttons & loaders */
+document.getElementById("clear").addEventListener("click",()=>{ elEditor.value=""; elLog.textContent=""; status("Cleared."); recalcPanels(); });
+
+document.getElementById("inFASTA").addEventListener("change", async ev=>{
+  const f=ev.target.files[0]; if(!f) return;
+  try{
+    const text=await f.text();
+    const recs=parseFASTA(text);
+    const normalized=recs.map(r=>({...r,nuc:r.seq.includes("U")?"RNA":"DNA"}));
+    elEditor.value=buildFASTA(normalized,80);
+    loadedFileName = f.name;  // preserve original name for save-as
+    status(`Loaded FASTA: ${f.name} (${recs.length} record${recs.length>1?'s':''})`);
+    log(`Loaded FASTA (${f.size} bytes). Parsed ${recs.length} record(s).`);
+    recalcPanels();
+  }catch(e){ log("ERROR reading/validating FASTA: "+e.message); }
+  finally{ ev.target.value=""; }
+});
+
+/* Load FASTB (auto-detect v2; warn for v1; keep UI responsive; log timing) */
+document.getElementById("inFASTB").addEventListener("change", async (ev) => {
+  /** ISO note: input is user-provided; processed in-memory only; no network I/O. */
+  const f = ev.target.files[0]; if (!f) return;
+  const t0 = performance.now();
+  try {
+    const buf = await f.arrayBuffer();
+    const u8 = new Uint8Array(buf);
+
+    // Flavor detection (v2 is FAST + version byte 0x02)
+    const isV2 = (u8.length >= 5 &&
+                  u8[0] === 0x46 && u8[1] === 0x41 && u8[2] === 0x53 && u8[3] === 0x54 &&
+                  u8[4] === V2_VER);
+
+    if (!isV2) {
+      // Legacy v1 can be slow in-browser (bitstring scans). Inform and yield once so log/status paint.
+      log("Note: legacy FASTB v1 detected — browser decode may be slower. After it loads, use “Save as .fastb” to convert to v2 for faster future loads.");
+      await new Promise(r => setTimeout(r, 0)); // yield to render
+    }
+
+    const records = decodeFASTB(u8); // v2 path is zero-copy fast; v1 path is legacy
+    if (records.length === 0) throw new Error("No records decoded.");
+
+    elEditor.value = buildFASTA(records, 80);
+    loadedFileName = f.name;
+
+    const ms = (performance.now() - t0).toFixed(0);
+    const flavor = isV2 ? "v2" : "v1";
+    status(`Decoded FASTB (${flavor}): ${f.name} ➜ ${records.length} record(s) [${ms} ms]`);
+    log(`Decoded FASTB ${flavor.toUpperCase()} (${u8.length} bytes) in ${ms} ms`);
+    recalcPanels();
+  } catch (e) {
+    log("ERROR decoding FASTB: " + e.message);
+  } finally {
+    ev.target.value = ""; // allow re-selecting same file
+  }
+});
+
+/* Save as .fastb (v2 preferred; filename preserving + Save As dialog when available) */
+document.getElementById("toFASTB").addEventListener("click", async () => {
+  try{
+    const bytes=encodeFASTB_fromFASTA_v2(elEditor.value);
+
+    const base = loadedFileName ? loadedFileName.replace(/\.[^/.]+$/, "") : "converted";
+    const suggestedName = `${base}.fastb2`; // prefer new extension (safe); change to .fastb if you want to reuse
+
+    if (window.showSaveFilePicker){
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: "FASTB v2 files",
+          accept: {
+            "application/octet-stream": [".fastb2", ".fbx"],
+            "application/x-fastb": [".fastb2", ".fbx"]
+          }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(bytes);
+      await writable.close();
+      status(`Saved ${suggestedName}`);
+      log(`Encoded FASTA ➜ FASTB v2 (${bytes.byteLength} bytes) via Save File Picker.`);
+      return;
+    }
+
+    const blob=new Blob([bytes],{type:"application/octet-stream"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=suggestedName; a.click();
+    URL.revokeObjectURL(url);
+    status(`Saved ${suggestedName}`);
+    log(`Encoded FASTA ➜ FASTB v2 (${bytes.byteLength} bytes).`);
+  }catch(e){ log("ERROR encoding to FASTB v2: "+e.message); }
+});
+
+/* Download .fasta (unchanged; filename preserving + Save As dialog when available) */
+document.getElementById("toFASTA").addEventListener("click", async () => {
+  try{
+    const recs=parseFASTA(elEditor.value);
+    const textOut=buildFASTA(recs.map(r=>({...r,nuc:r.seq.includes("U")?"RNA":"DNA"})),80);
+
+    const base = loadedFileName ? loadedFileName.replace(/\.[^/.]+$/, "") : "converted";
+    const suggestedName = `${base}.fasta`;
+
+    if (window.showSaveFilePicker){
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: "FASTA files",
+          accept: { "text/plain": [".fasta", ".fa", ".txt"] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([textOut], { type: "text/plain;charset=utf-8" }));
+      await writable.close();
+      status(`Saved ${suggestedName}`);
+      log(`Prepared FASTA (${textOut.length} chars) via Save File Picker.`);
+      return;
+    }
+
+    const blob=new Blob([textOut],{type:"text/plain;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=suggestedName; a.click();
+    URL.revokeObjectURL(url);
+    status(`Downloaded ${suggestedName}`);
+    log(`Prepared FASTA (${textOut.length} chars).`);
+  }catch(e){ log("ERROR preparing FASTA: "+e.message); }
+});
+
+/* Drag & drop (onto editor) — updated to detect v2, warn/yield for v1, and log timing */
+(function addDragDrop(){
+  const dz = elEditor;
+  const add = () => dz.classList.add("dz-on");
+  const rm  = () => dz.classList.remove("dz-on");
+
+  ["dragenter","dragover"].forEach(evt =>
+    dz.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); add(); })
+  );
+  ["dragleave","drop"].forEach(evt =>
+    dz.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); rm(); })
+  );
+
+  dz.addEventListener("drop", async (e) => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+
+    const t0 = performance.now();
+    try {
+      if (/\.(fastb2|fbx)$/i.test(f.name) || /\.fastb$/i.test(f.name)) {
+        // FASTB (v2 preferred; v1 supported)
+        const buf = await f.arrayBuffer();
+        const u8  = new Uint8Array(buf);
+
+        // Detect v2 via magic "FAST" + version byte
+        const isV2 = (u8.length >= 5 &&
+                      u8[0] === 0x46 && u8[1] === 0x41 && u8[2] === 0x53 && u8[3] === 0x54 &&
+                      u8[4] === V2_VER);
+
+        if (!isV2) {
+          // Legacy v1 can be slower in-browser; inform and yield so the log paints
+          log("Note: legacy FASTB v1 detected — browser decode may be slower. After it loads, use “Save as .fastb” to convert to v2 for faster future loads.");
+          await new Promise(r => setTimeout(r, 0));
+        }
+
+        const recs = decodeFASTB(u8); // auto-detects; v2 path is zero-copy/fast
+        if (recs.length === 0) throw new Error("No records decoded.");
+
+        elEditor.value   = buildFASTA(recs, 80);
+        loadedFileName   = f.name;
+
+        const ms     = (performance.now() - t0).toFixed(0);
+        const flavor = isV2 ? "v2" : "v1";
+        status(`Decoded FASTB (${flavor}): ${f.name} ➜ ${recs.length} record(s) [${ms} ms]`);
+        log(`Decoded FASTB ${flavor.toUpperCase()} (${u8.length} bytes) in ${ms} ms`);
+      } else {
+        // FASTA (text)
+        const text = await f.text();
+        const recs = parseFASTA(text);
+        const normalized = recs.map(r => ({ ...r, nuc: r.seq.includes("U") ? "RNA" : "DNA" }));
+        elEditor.value   = buildFASTA(normalized, 80);
+        loadedFileName   = f.name;
+
+        const ms = (performance.now() - t0).toFixed(0);
+        status(`Loaded FASTA: ${f.name} (${recs.length} record(s)) [${ms} ms]`);
+        log(`Loaded FASTA (${text.length} chars) in ${ms} ms`);
+      }
+
+      recalcPanels();
+    } catch (err) {
+      log("ERROR on drop: " + err.message);
+    }
+  });
+})();
+
+/* Live recalculation while typing */
+elEditor.addEventListener("input", debounce(recalcPanels,250));
+
+/* Initial render & banner */
+recalcPanels();
+log(`FASTB Web Editor v${APP_VERSION} | Built ${APP_BUILD_DATE}`);
+</script>
+</body>
+</html>
