@@ -1,8 +1,8 @@
 # FASTB — Binary Nucleotide Encoding (v2.1)
 
-**FASTB** is a binary file format for storing nucleotide sequence data from FASTA (and future formats such as FASTQ/FAST5) in a more **size-efficient** and **CPU-friendly** way.  
+**FASTB** is a binary file format for storing nucleotide sequence data from FASTA in a more **size-efficient** and **CPU-friendly** way.  
 
-Instead of encoding nucleotides as ASCII characters (8 bits each), FASTB stores them in compact 2-bit, 3-bit, or 4-bit encodings depending on the sequence complexity.  
+Instead of encoding nucleotides as ASCII characters (8-bits each), FASTB stores them in compact 2-bit, 3-bit, or 4-bit encodings depending on the sequence complexity.  
 
 ---
 
@@ -11,7 +11,7 @@ Instead of encoding nucleotides as ASCII characters (8 bits each), FASTB stores 
 FASTA files are simple and human-readable, but they are **inefficient** for computational workflows:
 
 - **High storage overhead**: Each base takes 8 bits in ASCII, even though only 4–16 symbols are used.
-- **CPU waste**: Every FASTA read requires ASCII parsing before being usable in analysis.
+- **CPU waste**: Every FASTA compression and decompression requires resources and time.
 - **Poor I/O performance**: More disk space → more read/write operations → more time spent loading data.
 
 FASTB solves these issues by storing nucleotides in binary directly — meaning:
@@ -118,10 +118,11 @@ Binary Diad encoding: 00 10 01 11 (8 bits total)
   - Now each record has an explicit encoding marker for decoding without guessing.
 - **Improved I/O pipeline**  
   - Sequential read/write optimizations.
-- **.gitignore ARCHIVE/** to keep repos clean.
 - **Error handling**  
   - Rejects unsupported amino acid FASTA files with a clear message.
 - **Cleaner separation** of metadata, encoding marker, sequence, and record terminator.
+- **Standalone Editor** usefule for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
+- **HTML Implementation** usefule for pulling out or saving sequences for use in other applications; client side and on via web-interface.
 
 ---
 
