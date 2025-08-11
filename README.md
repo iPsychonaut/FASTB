@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="resources/FASTB_banner.svg" alt="FASTB Banner" width="500">
+</div>
+
 # FASTB — Binary Nucleotide Encoding (v2.1)
 
 **FASTB** is a binary file format for storing nucleotide sequence data from FASTA in a more **size-efficient** and **CPU-friendly** way.  
@@ -109,6 +113,18 @@ Binary Tetrad encoding: 0100 1000 0010 0001 (16 bits total)
 Binary Diad encoding: 00 10 01 11 (8 bits total)
 
 **Reduction:** From 32 bits → 8 bits (75% smaller).
+
+### Example Short-Sequence (i.e. fungal ITS)
+
+<div align="center">
+  <img src="resources/short_comparison.svg" alt="Short-Sequence Comparison" width="500">
+</div>
+
+### Example Long-Sequence (i.e. Cordyceps militaris )
+
+<div align="center">
+  <img src="resources/long_comparison.svg" alt="Long-Sequence Comparison" width="500">
+</div>
 
 ---
 
