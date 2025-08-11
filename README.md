@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="600">
+  <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="500">
 </div>
 
 # FASTB — Binary Nucleotide Encoding (v2.1)
@@ -114,16 +114,16 @@ Binary Diad encoding: 00 10 01 11 (8 bits total)
 
 **Reduction:** From 32 bits → 8 bits (75% smaller).
 
-### Example Short-Sequence (i.e. fungal ITS)
+### Example Short-Sequence (i.e. single fungal ITS)
 
 <div align="center">
-  <img src="resources/short_comparison.svg" alt="Short-Sequence Comparison" width="500">
+  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="500">
 </div>
 
-### Example Long-Sequence (i.e. Cordyceps militaris )
+### Example Long-Sequence (i.e. full fungal genome)
 
 <div align="center">
-  <img src="resources/long_comparison.svg" alt="Long-Sequence Comparison" width="500">
+  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="500">
 </div>
 
 ---
