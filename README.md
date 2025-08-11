@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="800">
+  <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="1000">
 </div>
 
 # FASTB — Binary Nucleotide Encoding (v2.1)
