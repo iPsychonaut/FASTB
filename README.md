@@ -137,8 +137,8 @@ Binary Diad encoding: 00 10 01 11 (8 bits total)
 - **Error handling**  
   - Rejects unsupported amino acid FASTA files with a clear message.
 - **Cleaner separation** of metadata, encoding marker, sequence, and record terminator.
-- **Standalone Editor** usefule for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
-- **HTML Implementation** usefule for pulling out or saving sequences for use in other applications; client side and on via web-interface.
+- **Standalone Editor** useful for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
+- **HTML Implementation** useful for pulling out or saving sequences for use in other applications; client side and on via web-interface.
 
 ---
 
