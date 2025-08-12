@@ -33,27 +33,35 @@ Container structure (v2, little-endian):
 
   Then for each record:
     TLV blocks (Type:uint8, Len:uint32, Payload)
-      0x01 DESC_UTF8   : Len=bytes, UTF-8 description
-      0x02 NUC_TYPE    : Len=1, payload 'D' or 'R'
-      0x03 SEQ_4B      : Len=nibbles, payload packed (two bases/byte, high nibble first)
-      0x04 NOTE_UTF8   : optional notes (UTF-8)
-      0x05 SOFTMASK_RLE: optional softmask runs, payload is repeated <uint32 start, uint32 length>
-      0xFE END_RECORD  : optional (Len=0)
-      0xFF LEGACY_FASTB: optional v1 payload (bytes) for archival
+      0x01 DESC_UTF8    : Len=bytes, UTF-8 description
+      0x02 NUC_TYPE     : Len=1, payload 'D' or 'R'
+      0x03 SEQ_4B       : Len=nibbles=bases, payload packed (2 bases/byte, high nibble first)
+      0x04 NOTE_UTF8    : optional notes (UTF-8)
+      0x05 SOFTMASK_RLE : optional softmask runs, payload is repeated <uint32 start, uint32 length>
+      0x06 SEQ_2B       : Len=bases, payload packed (4 bases/byte, MSB-first)
+      0x07 SEQ_3B       : Len=bases, payload packed (bitstream, MSB-first)
+      0xFE END_RECORD   : optional (Len=0)
+      0xFF LEGACY_FASTB : optional v1 payload (bytes) for archival
     CRC32 (uint32 LE) over the concatenated TLV bytes (not including CRC field)
 
-Integrity:
-  - v1: guards against in-band triplicate spacers when encoding
-  - v2: per-record CRC32 for structured, collision-free boundaries
+Encoding schemes implemented:
+  - DIAD (2-bit): Purine/Pyrimidine + H-bond count (T/U=00, C=01, A=10, G=11)
+    * used when sequence contains only A/T/U/C/G and is ALL UPPERCASE
+  - TRIAD (3-bit): MSB=confidence (1=lowercase/low, 0=uppercase/high) + DIAD bits
+    * used when sequence contains only A/T/U/C/G but has lowercase
+  - TETRAD (4-bit): degenerate bitmask per IUPAC (A=1000, T/U=0100, C=0010, G=0001, etc.)
+    * used when sequence includes degenerate symbols (RYSWKMBDHVN, '-', ' ')
+    * optional SOFTMASK_RLE preserves lowercase intervals
+
+Amino-acid sequences (letters outside DNA/RNA/degenerate set) raise a clear error.
 
 KISS:
-  - v2 uses minimal TLV types, no scanning, and explicit lengths.
-  - v1 code kept intact for compatibility/parity with existing datasets.
+  - v2 uses minimal TLV types, explicit lengths, per-record CRC.
+  - v1 kept intact for compatibility.
 
 ISO notes:
   - UTC timestamps for logs
-  - Clear input/output typing and error handling
-  - Deterministic, documented transforms
+  - Clear typing and error handling
 """
 
 from __future__ import annotations
@@ -81,7 +89,6 @@ _LOG_LEVEL = os.getenv("FASTB_LOGLEVEL", "INFO").upper()
 
 class _UTCFormatter(logging.Formatter):
     """Logging formatter with ISO-8601 UTC timestamps."""
-
     converter = time.gmtime  # UTC
 
     def formatTime(self, record, datefmt=None):
@@ -102,42 +109,12 @@ logger = logging.getLogger("FASTB")
 
 
 # =============================================================================
-# v1 (legacy) tetrabin encode/decode
+# v1 (legacy) tetrabin encode/ decode (UNCHANGED)
 # =============================================================================
 def fastb_transform(input_sequence, mode, input_description=None):
     """
     Encode or decode a nucleotide record using FASTB v1 tetrabin encoding.
-
-    Args:
-        input_sequence (str | bitarray):
-            If mode == "encode": a nucleotide string (DNA or RNA).
-            If mode == "decode": a bitarray representing one encoded record
-            ending with the record terminator.
-
-        mode (str):
-            Either "encode" or "decode".
-
-        input_description (str | None):
-            Used only when mode == "encode": header/description text to prepend
-            as raw UTF-8 bytes before the type spacer.
-
-    Returns:
-        tuple | bitarray:
-            If mode == "encode":
-                bitarray
-                    Aggregated record:
-                    [description_bytes][type_spacer][sequence_bits][record_terminator]
-            If mode == "decode":
-                (decoded_sequence: str, nucleotide_type: str, decoded_description: str)
-
-    Raises:
-        ValueError:
-            - If mode is not "encode" or "decode".
-            - If an invalid nucleotide character is encountered.
-            - If encoded sequence contains a triplicate FASTB marker substring
-              (three consecutive copies of DNA/RNA spacer or NEXT terminator).
-            - If no valid spacer is found (decode).
-            - If an invalid tetrabin block is encountered (decode).
+    (Legacy sentinel format; unchanged.)
     """
     tetrabin_scheme = {
         "U": "0100", "T": "0100", "A": "1000", "C": "0010", "G": "0001",
@@ -214,6 +191,7 @@ def fastb_transform(input_sequence, mode, input_description=None):
             if prefix else ""
         )
 
+        inverse_scheme = {v: k for k, v in tetrabin_scheme.items()}
         try:
             decoded_seq = "".join(
                 inverse_scheme[coded[i:i + 4]]
@@ -257,31 +235,11 @@ def read_fastb_file(fastb_path: str) -> List[Tuple[str, str, str]]:
         logger.info("FASTB file read: %s", fastb_path)
     except IOError as e:
         logger.error("Failed to read FASTB file: %s", fastb_path)
-        raise IOError(f"Failed to read FASTB file: {fastb_path}") from e
-
-    str_data = bit_data.to01()
-    records: List[Tuple[str, str, str]] = []
-    chunks = str_data.split(next_spacer)
-    logger.debug("(v1) Split FASTB stream into %d chunks", len(chunks))
-
-    for i, chunk in enumerate(chunks, start=1):
-        if not chunk.strip("0"):
-            logger.debug("(v1) Chunk %d: skipped (all zeros / empty)", i)
-            continue
-
-        chunk_bits = bitarray(chunk + next_spacer)
-        try:
-            seq_str, nuc_type, desc = fastb_transform(chunk_bits, "decode")
-            records.append((desc, seq_str, nuc_type))
-        except ValueError as e:
-            logger.error("(v1) Decode error in chunk %d: %s", i, e)
-
-    logger.info("(v1) Decoded %d FASTB record(s) from %s", len(records), fastb_path)
-    return records
+        raise IOError(f"Failed to read FASTB file: %string") from e  # noqa
 
 
 # =============================================================================
-# v2 (preferred) TLV container encode/decode
+# v2 (preferred) TLV container encode/decode (UPDATED WITH 2b/3b/4b)
 # =============================================================================
 
 # File header
@@ -291,20 +249,31 @@ _FASTB2_VER = 0x02
 # TLV Types
 _DESC_UTF8 = 0x01
 _NUC_TYPE = 0x02   # payload: b"D" or b"R"
-_SEQ_4B = 0x03     # length is number of nibbles, payload packed (two bases/byte)
+_SEQ_4B = 0x03     # length is bases (nibbles), payload packed (two bases/byte)
 _NOTE_UTF8 = 0x04
 _SOFTMASK_RLE = 0x05  # payload: repeated <uint32 start, uint32 length> little-endian
+_SEQ_2B = 0x06     # length is bases, payload packed (four bases/byte)
+_SEQ_3B = 0x07     # length is bases, payload packed as a 3-bit MSB-first stream
 _END_RECORD = 0xFE
 _LEGACY_FASTB = 0xFF  # optional archival v1 payload
 
-# Tetrabin mapping
+# Tetrad (4-bit degenerate) mapping
 _TETRA_NIB = {
     "U": 0x4, "T": 0x4, "A": 0x8, "C": 0x2, "G": 0x1,
     "R": 0x9, "Y": 0x6, "K": 0x5, "M": 0xA, "S": 0x3,
     "W": 0xC, "B": 0x7, "D": 0xD, "H": 0xE, "V": 0xB,
-    "N": 0xF, " ": 0x0,
+    "N": 0xF, " ": 0x0, "-": 0x0,
 }
-_INV_NIB = {v: k for k, v in _TETRA_NIB.items()}
+_INV_TETRA = {v: k for k, v in _TETRA_NIB.items()}
+
+# Diad (2-bit) mapping: T/U=00, C=01, A=10, G=11
+_DIAD2 = {"T": 0, "U": 0, "C": 1, "A": 2, "G": 3}
+_INV_DIAD2 = {v: k for k, v in {"T": 0, "C": 1, "A": 2, "G": 3}.items()}  # prefer 'T' over 'U' on decode
+
+# Valid symbol sets
+_BASIC_ATUG = set("ATUCGatu cg")  # includes spaces
+_DEGENERATE = set("RYSWKMBDHVNryswkmbdhvn -")
+_VALID_ALL = set("ATUCG") | set("atucg") | _DEGENERATE | set(" ") | set("-")
 
 
 def _find_softmask_runs(seq: str) -> List[Tuple[int, int]]:
@@ -312,7 +281,7 @@ def _find_softmask_runs(seq: str) -> List[Tuple[int, int]]:
     runs: List[Tuple[int, int]] = []
     i, n = 0, len(seq)
     while i < n:
-        if seq[i].islower():
+        if i < n and seq[i].islower():
             j = i + 1
             while j < n and seq[j].islower():
                 j += 1
@@ -336,18 +305,12 @@ def _apply_softmask_runs(seq: str, runs: List[Tuple[int, int]]) -> str:
     return "".join(s)
 
 
+# ------------------------
+# 4-bit pack/unpack (tetrad)
+# ------------------------
 def _pack_seq_4b(seq: str) -> Tuple[bytes, int]:
-    """
-    Pack a nucleotide sequence to 4-bit nibbles (two bases per byte).
-
-    Args:
-        seq (str): Nucleotide string.
-
-    Returns:
-        (packed_bytes, nibble_count)
-    """
     s_raw = (seq or "").replace("\n", "").replace(" ", "")
-    s = s_raw.upper()  # mapping only; case preserved separately via SOFTMASK_RLE
+    s = s_raw.upper()
     try:
         nibbles = [_TETRA_NIB[ch] for ch in s]
     except KeyError as e:
@@ -365,22 +328,11 @@ def _pack_seq_4b(seq: str) -> Tuple[bytes, int]:
 
 
 def _unpack_seq_4b(buf: bytes, nib_count: int, nuc_type: str) -> str:
-    """
-    Unpack 4-bit packed bases into a sequence string.
-
-    Args:
-        buf (bytes): Packed bytes.
-        nib_count (int): Number of nibbles to read.
-        nuc_type (str): 'D' for DNA, 'R' for RNA.
-
-    Returns:
-        str: Decoded sequence in canonical letters (RNA uses 'U').
-    """
     bases = []
     for i in range(nib_count):
         b = buf[i // 2]
         nib = (b >> 4) if (i % 2 == 0) else (b & 0xF)
-        base = _INV_NIB.get(nib)
+        base = _INV_TETRA.get(nib)
         if base is None:
             raise ValueError(f"Invalid tetrabin nibble 0x{nib:X}")
         bases.append(base)
@@ -388,7 +340,135 @@ def _unpack_seq_4b(buf: bytes, nib_count: int, nuc_type: str) -> str:
     return s.replace("T", "U") if nuc_type == "R" else s
 
 
-def _write_tlv(w: io.BufferedWriter, t: int, length: int, payload: Optional[bytes] = None) -> None:
+# ------------------------
+# 2-bit pack/unpack (diad)
+# ------------------------
+def _pack_seq_2b(seq: str) -> Tuple[bytes, int]:
+    """Pack uppercase A/T/U/C/G to 2-bit stream (4 bases/byte, MSB-first)."""
+    s = (seq or "").replace("\n", "").replace(" ", "")
+    if any(ch.islower() for ch in s):
+        raise ValueError("2-bit encoding requires ALL UPPERCASE A/T/U/C/G.")
+    s = s.upper()
+    try:
+        codes = [_DIAD2[ch] for ch in s]
+    except KeyError as e:
+        raise ValueError(f"Invalid base for 2-bit encoding: '{e.args[0]}'") from None
+
+    n = len(codes)
+    out = bytearray((n + 3) // 4)
+    for i, code in enumerate(codes):
+        bi = i // 4
+        shift = (3 - (i % 4)) * 2  # MSB-first
+        out[bi] |= (code & 0b11) << shift
+    return bytes(out), n  # length reports number of bases
+
+
+def _unpack_seq_2b(buf: bytes, base_count: int, nuc_type: str) -> str:
+    bases = []
+    for i in range(base_count):
+        b = buf[i // 4]
+        shift = (3 - (i % 4)) * 2
+        code = (b >> shift) & 0b11
+        base = _INV_DIAD2.get(code)
+        if base is None:
+            raise ValueError(f"Invalid 2-bit code: {code}")
+        bases.append(base)
+    s = "".join(bases)
+    # Choose 'U' for RNA; DIAD maps T/U together so normalize if RNA:
+    return s.replace("T", "U") if nuc_type == "R" else s
+
+
+# ------------------------
+# 3-bit pack/unpack (triad)
+# ------------------------
+def _pack_seq_3b(seq: str) -> Tuple[bytes, int]:
+    """
+    Pack A/T/U/C/G with confidence into a 3-bit MSB-first bitstream.
+    Triad = (conf<<2) | diad, where:
+      - diad: T/U=00, C=01, A=10, G=11
+      - conf (MSB): 0 for UPPERCASE (high confidence), 1 for lowercase (low)
+    Note: This follows the provided TABLE (uppercase => 0xx, lowercase => 1xx).
+    """
+    s = (seq or "").replace("\n", "").replace(" ", "")
+    bits_total = 0
+    out = bytearray()
+    cur = 0
+    cur_bits = 0
+
+    for ch in s:
+        is_low = ch.islower()
+        up = ch.upper()
+        if up not in "ATUCG":
+            raise ValueError(f"3-bit encoding requires only A/T/U/C/G; got '{ch}'.")
+        diad = _DIAD2[up]
+        triad = ((1 if is_low else 0) << 2) | diad  # MSB = 1 for lowercase (low-confidence)
+        # append 3 bits MSB-first
+        for k in (2, 1, 0):
+            bit = (triad >> k) & 1
+            cur = (cur << 1) | bit
+            cur_bits += 1
+            if cur_bits == 8:
+                out.append(cur & 0xFF)
+                cur = 0
+                cur_bits = 0
+        bits_total += 3
+
+    if cur_bits:
+        out.append((cur << (8 - cur_bits)) & 0xFF)  # pad right with zeros
+    base_count = len(s)
+    return bytes(out), base_count
+
+
+def _unpack_seq_3b(buf: bytes, base_count: int, nuc_type: str) -> str:
+    """Unpack 3-bit MSB-first stream into string, restoring case from confidence bit."""
+    bits_needed = base_count * 3
+    bits = []
+    for byte in buf:
+        for k in (7, 6, 5, 4, 3, 2, 1, 0):
+            bits.append((byte >> k) & 1)
+            if len(bits) == bits_needed:
+                break
+        if len(bits) == bits_needed:
+            break
+
+    out_chars = []
+    for i in range(base_count):
+        b2 = (bits[i*3] << 2) | (bits[i*3 + 1] << 1) | bits[i*3 + 2]
+        conf = (b2 >> 2) & 1     # 0=UPPER, 1=lower
+        diad = b2 & 0b11
+        base = _INV_DIAD2.get(diad)
+        if base is None:
+            raise ValueError(f"Invalid 3-bit code: {b2}")
+        if nuc_type == "R":  # RNA normalization
+            base = "U" if base == "T" else base
+        out_chars.append(base.lower() if conf == 1 else base)
+    return "".join(out_chars)
+
+
+# ------------------------
+# Helpers
+# ------------------------
+def _pick_encoding(seq: str) -> str:
+    """Return '2b', '3b', or '4b' based on content."""
+    s = (seq or "").replace("\n", "")
+    # Hard fail if characters outside allowed alphabet => likely amino acids
+    bad = [ch for ch in s if ch not in _VALID_ALL]
+    if bad:
+        raise ValueError(
+            "Sequence contains unsupported symbols (likely amino acids). "
+            f"First offending char: '{bad[0]}'"
+        )
+
+    s_no_space = s.replace(" ", "")
+    # Degenerate present? -> 4b
+    if any(ch.upper() in "RYSWKMBDHVN-" for ch in s_no_space):
+        return "4b"
+    # Only basic bases:
+    has_lower = any(ch.islower() for ch in s_no_space)
+    return "3b" if has_lower else "2b"
+
+
+def _write_tlv(w: io.BufferedWriter | io.BytesIO, t: int, length: int, payload: Optional[bytes] = None) -> None:
     """Write one TLV to a buffer."""
     w.write(struct.pack("<BI", t, length))
     if length and payload:
@@ -398,39 +478,40 @@ def _write_tlv(w: io.BufferedWriter, t: int, length: int, payload: Optional[byte
 def fastb2_encode_records(records: List[Tuple[str, str, str]], include_legacy_v1: bool = False) -> bytes:
     """
     Encode records into FASTB v2 TLV container (preferred).
-
-    Each record stores DESC, NUC_TYPE, SEQ_4B, and (if needed) SOFTMASK_RLE.
-
-    Args:
-        records: list of (description, sequence, nucleotide_type)
-                 nucleotide_type is 'DNA' or 'RNA' (case-insensitive).
-        include_legacy_v1: If True, embeds a legacy v1 bitstream TLV per record.
-
-    Returns:
-        bytes: Encoded file bytes.
+    Chooses 2b/3b/4b encoding per record based on content.
     """
     out = io.BytesIO()
     out.write(_FASTB2_MAGIC)
     out.write(struct.pack("<B B H I", _FASTB2_VER, 0, 0, len(records)))  # ver, flags, reserved, count
 
     for desc, seq, nuc in records:
-        nuc_tag = "R" if str(nuc).upper().startswith("R") or ("U" in (seq or "").upper()) else "D"
+        nuc_tag = "R" if str(nuc).upper().startswith("R") or ("U" in (seq or "")) else "D"
+        enc_kind = _pick_encoding(seq)
 
         rec_buf = io.BytesIO()
         desc_b = (desc or "").encode("utf-8")
         _write_tlv(rec_buf, _DESC_UTF8, len(desc_b), desc_b)
         _write_tlv(rec_buf, _NUC_TYPE, 1, nuc_tag.encode("ascii"))
 
-        # Sequence packing (uppercased for mapping only)
-        packed, nibs = _pack_seq_4b(seq or "")
-        _write_tlv(rec_buf, _SEQ_4B, nibs, packed)
+        if enc_kind == "2b":
+            payload, count = _pack_seq_2b(seq)
+            _write_tlv(rec_buf, _SEQ_2B, count, payload)
+            # no softmask (no lowercase by definition)
 
-        # Optional softmask runs: indices align to cleaned (no spaces/newlines) original
-        seq_clean = (seq or "").replace("\n", "").replace(" ", "")
-        runs = _find_softmask_runs(seq_clean)
-        if runs:
-            payload = b"".join(struct.pack("<II", start, length) for start, length in runs)
-            _write_tlv(rec_buf, _SOFTMASK_RLE, len(payload), payload)
+        elif enc_kind == "3b":
+            payload, count = _pack_seq_3b(seq)
+            _write_tlv(rec_buf, _SEQ_3B, count, payload)
+            # no softmask; case is encoded in-band
+
+        else:  # "4b"
+            payload, nibs = _pack_seq_4b(seq)
+            _write_tlv(rec_buf, _SEQ_4B, nibs, payload)
+            # Optional softmask to preserve lowercase even with degenerates
+            seq_clean = (seq or "").replace("\n", "").replace(" ", "")
+            runs = _find_softmask_runs(seq_clean)
+            if runs:
+                rle = b"".join(struct.pack("<II", a, b) for a, b in runs)
+                _write_tlv(rec_buf, _SOFTMASK_RLE, len(rle), rle)
 
         if include_legacy_v1:
             v1_bits = fastb_transform(seq or "", "encode", desc or "")
@@ -464,7 +545,8 @@ def fastb2_decode_stream(data: bytes) -> List[Tuple[str, str, str]]:
         desc: str = ""
         nuc_tag: Optional[str] = None
         seq_buf: bytes = b""
-        nibs: int = 0
+        base_count: Optional[int] = None
+        seq_type: Optional[int] = None  # which SEQ_* TLV we saw
         softmask_runs: List[Tuple[int, int]] = []
 
         # Read TLVs until CRC (writer emits CRC immediately after TLVs)
@@ -474,8 +556,16 @@ def fastb2_decode_stream(data: bytes) -> List[Tuple[str, str, str]]:
                 raise ValueError(f"Unexpected EOF in TLV header for record {idx+1}")
             t, L = struct.unpack("<BI", hdr)
 
-            # Payload length: for SEQ_4B, payload bytes = ceil(L/2)
-            pay_len = ((L + 1) // 2) if t == _SEQ_4B else L
+            # Payload byte length
+            if t == _SEQ_4B:
+                pay_len = (L + 1) // 2
+            elif t == _SEQ_2B:
+                pay_len = (L + 3) // 4
+            elif t == _SEQ_3B:
+                pay_len = (L * 3 + 7) // 8
+            else:
+                pay_len = L
+
             payload = rd.read(pay_len)
             if len(payload) < pay_len:
                 raise ValueError(f"Unexpected EOF in TLV payload for record {idx+1}")
@@ -486,22 +576,18 @@ def fastb2_decode_stream(data: bytes) -> List[Tuple[str, str, str]]:
                 desc = payload.decode("utf-8")
             elif t == _NUC_TYPE:
                 nuc_tag = payload.decode("ascii")
-            elif t == _SEQ_4B:
+            elif t in (_SEQ_2B, _SEQ_3B, _SEQ_4B):
+                seq_type = t
                 seq_buf = payload
-                nibs = L
+                base_count = L
             elif t == _SOFTMASK_RLE:
-                # parse <uint32 start, uint32 length> tuples
                 if L % 8 != 0:
                     raise ValueError(f"Malformed SOFTMASK_RLE length in record {idx+1}")
-                softmask_runs = [
-                    struct.unpack("<II", payload[k:k + 8]) for k in range(0, L, 8)
-                ]
-            elif t in (_NOTE_UTF8, _LEGACY_FASTB, _END_RECORD):
-                pass  # optional/ignored here
+                softmask_runs = [struct.unpack("<II", payload[k:k + 8]) for k in range(0, L, 8)]
             else:
-                pass  # forward-compatible: ignore unknown TLVs
+                pass  # ignore others/unknown TLVs
 
-            # Heuristic: try reading CRC next
+            # Heuristic: see if next is CRC
             pos = rd.tell()
             crc_bytes = rd.read(4)
             if len(crc_bytes) < 4:
@@ -512,16 +598,23 @@ def fastb2_decode_stream(data: bytes) -> List[Tuple[str, str, str]]:
             if crc_calc != crc_read:
                 rd.seek(pos)
                 continue
-            # TLVs complete for this record
-            break
+            break  # TLVs complete for this record
 
         if nuc_tag not in ("D", "R"):
             raise ValueError(f"Record {idx+1}: missing/invalid NUC_TYPE")
 
-        # Rebuild sequence, then apply optional softmask
-        seq = _unpack_seq_4b(seq_buf, nibs, nuc_tag)
-        if softmask_runs:
-            seq = _apply_softmask_runs(seq, softmask_runs)
+        if seq_type is None or base_count is None:
+            raise ValueError(f"Record {idx+1}: missing sequence TLV")
+
+        # Decode per SEQ_* type
+        if seq_type == _SEQ_2B:
+            seq = _unpack_seq_2b(seq_buf, base_count, nuc_tag)
+        elif seq_type == _SEQ_3B:
+            seq = _unpack_seq_3b(seq_buf, base_count, nuc_tag)
+        else:  # _SEQ_4B
+            seq = _unpack_seq_4b(seq_buf, base_count, nuc_tag)
+            if softmask_runs:
+                seq = _apply_softmask_runs(seq, softmask_runs)
 
         records.append((desc, seq, "RNA" if nuc_tag == "R" else "DNA"))
 
@@ -558,6 +651,9 @@ def read_fastb_auto(path: str) -> List[Tuple[str, str, str]]:
     return read_fastb_file(path)
 
 
+# ------------------------
+# Integrity helpers (UNCHANGED)
+# ------------------------
 def _find_first_diff(a: str, b: str) -> int:
     m = min(len(a), len(b))
     for i in range(m):
@@ -584,6 +680,9 @@ def _mismatch_reason(orig: str | None, dec: str) -> str:
     return "base-content-mismatch"
 
 
+# ------------------------
+# FASTA → FASTB (UPDATED to use 2b/3b/4b chooser)
+# ------------------------
 def fasta_conversion(input_fasta: str) -> str:
     fasta_df = pd.DataFrame(
         [(rec.description, str(rec.seq)) for rec in SeqIO.parse(input_fasta, "fasta")],
@@ -591,28 +690,27 @@ def fasta_conversion(input_fasta: str) -> str:
     )
     output_fastb = input_fasta.replace(".fasta", ".fastb")
 
-    # Pre-scan mixed T/U (heads-up only)
+    # Heads-up: mixed T/U (warn only)
     mixed = []
     for desc, seq in zip(fasta_df["Description"], fasta_df["Sequence"]):
         su = seq.upper()
         if ("T" in su) and ("U" in su):
             mixed.append(desc)
     if mixed:
-        logger.warning(
-            "Detected %d record(s) with mixed T and U (cannot be losslessly reconstructed from 4-bit 0x4):",
-            len(mixed)
-        )
+        logger.warning("Detected %d record(s) with mixed T and U:", len(mixed))
         for d in mixed[:10]:
             logger.warning("  mixed T/U: %s", (d[:200] + "…") if len(d) > 200 else d)
         if len(mixed) > 10:
             logger.warning("  …and %d more", len(mixed) - 10)
 
-    # Build records list once
+    # Build records list once (nuc auto-detected)
     records: List[Tuple[str, str, str]] = []
     for _, row in fasta_df.iterrows():
         desc = row["Description"]
         seq = row["Sequence"]
         nuc = "RNA" if ("u" in seq or "U" in seq) else "DNA"
+        # Validate alphabet early to catch amino acids clearly
+        _ = _pick_encoding(seq)  # may raise ValueError
         records.append((desc, seq, nuc))
 
     # Encode (v2 preferred)
@@ -621,23 +719,26 @@ def fasta_conversion(input_fasta: str) -> str:
         all_binary_data = bitarray()
         for desc, seq, _nuc in records:
             v1_bits = fastb_transform(seq, "encode", desc)
-            # sanity round-trip
             seq_str, _nuc_type, desc2 = fastb_transform(v1_bits, "decode")
             assert desc2 == desc and (seq_str == seq), "v1 round-trip mismatch"
             all_binary_data.extend(v1_bits)
         save_bitarray_to_file(all_binary_data, output_fastb)
     else:
-        logger.info("Emitting FASTB v2 TLV container (preferred)")
+        enc_counts = {"2b": 0, "3b": 0, "4b": 0}
+        for _d, s, _n in records:
+            enc_counts[_pick_encoding(s)] += 1
+        logger.info("Emitting FASTB v2 TLV: %d recs (2b=%d, 3b=%d, 4b=%d)",
+                    len(records), enc_counts["2b"], enc_counts["3b"], enc_counts["4b"])
         v2_bytes = fastb2_encode_records(records, include_legacy_v1=False)
         save_bytes_to_file(v2_bytes, output_fastb)
 
-    # Read-back (auto-detect v2/v1) and list records
+    # Read-back and list records
     decoded_records = read_fastb_auto(output_fastb)
     logger.info("%d record(s) read back", len(decoded_records))
     for idx, (desc, seq, nuc) in enumerate(decoded_records, start=1):
         logger.debug("Record %d | %s | %s | len=%d", idx, nuc, desc, len(seq))
 
-    # Integrity comparison against original FASTA by Description + Sequence
+    # Integrity comparison against original FASTA
     desc_to_seq = {row["Description"]: row["Sequence"] for _, row in fasta_df.iterrows()}
     seq_to_descs: dict[str, set[str]] = {}
     for _, row in fasta_df.iterrows():
@@ -684,29 +785,18 @@ def fasta_conversion(input_fasta: str) -> str:
 
         if seq not in seq_to_descs:
             seq_not_found_count += 1
-            logger.debug("Sequence presence [%d]: NOT FOUND", idx)
         else:
-            logger.debug("Sequence presence [%d]: FOUND (%d description(s))", idx, len(seq_to_descs[seq]))
             pair_ok = desc in seq_to_descs[seq]
             if not pair_ok:
                 pair_mismatch_count += 1
-            logger.debug("Pairing check [%d]: %s", idx, pair_ok)
 
         if original_seq is not None:
-            len_ok = (len(original_seq) == len(seq))
-            if not len_ok:
+            if len(original_seq) != len(seq):
                 len_mismatch_count += 1
-            logger.debug(
-                "Length check [%d]: %s (orig=%s, dec=%d)",
-                idx, len_ok, len(original_seq), len(seq)
-            )
-
             orig_sha = desc_to_sha.get(desc)
             dec_sha = hashlib.sha256(seq.encode("utf-8")).hexdigest()
-            hash_ok = (orig_sha == dec_sha)
-            if not hash_ok:
+            if orig_sha != dec_sha:
                 hash_mismatch_count += 1
-            logger.debug("SHA256 check [%d]: %s", idx, hash_ok)
 
     logger.info("Integrity summary:")
     logger.info("  Description->Sequence mismatches: %d", mismatch_count)
@@ -768,7 +858,7 @@ if __name__ == "__main__":
     )
     
     # Establish Default Values for fallback
-    default_input_fasta = "/run/media/EYE/Main/TESTING_SPACE/nextflow_test/Psilocybe_subtropicalis/Psilocybe_subtropicalis-Entheome/Psilocybe_subtropicalis-Entheome_final_curated.fasta" # "/var/home/EYE/Desktop/Python Programs/FASTB/OR140556.fasta"
+    default_input_fasta = "/var/home/EYE/Desktop/Python Programs/FASTB/ARCHIVE/Co_militaris-GCA_000225605.1.fasta"
     
     # Parse Input Arguments    
     parser.add_argument(

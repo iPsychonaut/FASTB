@@ -376,7 +376,7 @@ if __name__ == "__main__":
     )
     
     # Establish Default Values for fallback
-    default_input_fasta = "/run/media/EYE/Main/TESTING_SPACE/nextflow_test/Psilocybe_subtropicalis/Psilocybe_subtropicalis-Entheome/Psilocybe_subtropicalis-Entheome_final_curated.fasta" # "/var/home/EYE/Desktop/Python Programs/FASTB/OR140556.fasta"
+    default_input_fasta = "/var/home/EYE/Desktop/Python Programs/FASTB/ARCHIVE/Co_militaris-GCA_000225605.1.fasta"
     default_cpu_threads = 12
     default_compare = True
     

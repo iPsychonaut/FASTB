@@ -4,17 +4,18 @@
 FASTB Editor (PyQt)
 
 Minimal editor that treats a .fastb file like text:
-- Open a .fastb -> decode to FASTA-like text in the editor.
-- Save -> re-encode to .fastb with a .bak backup and integrity validation.
+- Open a .fastb -> decode (v1 or v2) to FASTA-like text in the editor.
+- Save -> re-encode to .fastb (v2 with auto 2b/3b/4b; or v1 if FASTB_LEGACY=1)
+  with a .bak backup and integrity validation.
 
 Dependencies:
     - PyQt5
     - bitarray
-    - Your existing fastb.py module in the same folder (providing:
-        fastb_transform, read_fastb_file, save_bitarray_to_file)
+    - fastb.py in the same folder (exposes: read_fastb_auto, fastb2_encode_records,
+      save_bytes_to_file, fastb_transform, save_bitarray_to_file, _pick_encoding)
 
 Usage:
-    python fastb_editor.py                # launches empty, use File > Open
+    python fastb_editor.py
     python fastb_editor.py /path/file.fastb
 
 Editable text format (FASTB-EDIT-TXT v1):
@@ -22,11 +23,8 @@ Editable text format (FASTB-EDIT-TXT v1):
     - Header lines start with '>' and may include an advisory NUC hint:
         >DESCRIPTION TEXT | NUC=DNA
         >Another record without hint
-    - Sequence lines follow (A/C/G/T/U/N only), any wrapping ok
+    - Sequence lines follow (A/C/G/T/U and IUPAC degenerates allowed)
     - Blank line separates records
-
-Round-trip is validated on Save by decoding the newly written .fastb and
-ensuring at least one record exists (and basic sanity of lengths).
 """
 
 import sys
@@ -37,68 +35,67 @@ from typing import List, Tuple, Optional
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox,
-    QAction, QPlainTextEdit, QWidget, QVBoxLayout, QLabel, QStatusBar
+    QAction, QPlainTextEdit, QWidget, QVBoxLayout, QStatusBar
 )
 from PyQt5.QtCore import Qt
 
-# Import your codec module
-# Ensure fastb.py is in the same directory or on PYTHONPATH
+# Import codec module beside this file
 import importlib
-fastb = importlib.import_module("fastb")  # your existing module
+fastb = importlib.import_module("fastb")
 
 WRAP = 80  # purely cosmetic when exporting text; editor itself doesn't hard-wrap
 
 
+# --------------------------
+# Decode/Encode text helpers
+# --------------------------
 def decode_fastb_to_text(fastb_path: Path) -> str:
     """
-    Decode a .fastb file into FASTB-EDIT-TXT v1 text.
-
-    Args:
-        fastb_path: Path to .fastb file.
-
-    Returns:
-        str: Text content for the editor.
+    Decode a .fastb (v1 or v2) into FASTB-EDIT-TXT v1 text.
     """
-    records = fastb.read_fastb_file(str(fastb_path))
+    records = fastb.read_fastb_auto(str(fastb_path))  # [(desc, seq, 'DNA'|'RNA')]
     lines = []
     lines.append("# FASTB-EDIT-TXT v1")
     lines.append("# Lines starting with '>' are headers. Optional meta: '| NUC=DNA|RNA'")
-    lines.append("# Blank line separates records. Sequences are raw A/C/G/T/U/N.\n")
+    lines.append("# Blank line separates records. Degenerates and lowercase preserved.\n")
+
     for desc, seq, nuc in records:
-        header = f">{desc}"
-        if nuc in {"DNA", "RNA"}:
-            header += f" | NUC={nuc}"
+        # Show an advisory about which codec *would* be used if saved
+        try:
+            enc = fastb._pick_encoding(seq)  # '2b' | '3b' | '4b'
+        except Exception:
+            enc = "4b"  # fall back to safest
+        header = f">{desc} | NUC={nuc} | ENC={enc}"
         lines.append(header)
         for i in range(0, len(seq), WRAP):
             lines.append(seq[i:i + WRAP])
-        lines.append("")  # blank line between records
+        lines.append("")  # blank line
+
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _parse_edit_text(text: str) -> List[Tuple[str, str]]:
+def _parse_edit_text(text: str) -> List[Tuple[str, str, Optional[str]]]:
     """
-    Parse FASTB-EDIT-TXT v1 text into a list of (description, sequence).
+    Parse FASTB-EDIT-TXT v1 text into a list of (description, sequence, nuc_hint).
 
-    Notes:
-        - NUC hint is advisory; encoding deduces T/U itself.
-        - Comments (#) ignored. Blank line flushes the current record.
-
-    Returns:
-        list of (desc, sequence)
+    - NUC hint is advisory; if absent, infer from sequence (presence of U/u -> RNA).
+    - Comments (#) ignored. Blank line flushes the current record.
     """
-    records: List[Tuple[str, str]] = []
+    records: List[Tuple[str, str, Optional[str]]] = []
     desc: Optional[str] = None
+    nuc_hint: Optional[str] = None
     seq_chunks: List[str] = []
 
     def flush():
-        nonlocal desc, seq_chunks
+        nonlocal desc, nuc_hint, seq_chunks
         if desc is None:
             return
         seq = "".join(seq_chunks).replace(" ", "").replace("\t", "")
         if not seq:
             raise ValueError(f"Empty sequence for record: {desc}")
-        records.append((desc, seq))
+        records.append((desc, seq, nuc_hint))
         desc = None
+        nuc_hint = None
         seq_chunks = []
 
     for raw in text.splitlines():
@@ -111,10 +108,16 @@ def _parse_edit_text(text: str) -> List[Tuple[str, str]]:
         if line.startswith(">"):
             flush()
             header = line[1:].strip()
+            # Parse optional metadata like " | NUC=DNA"
+            nuc_hint = None
             if " | " in header:
-                parts = header.split(" | ", 1)
-                desc = parts[0].strip()
-                # meta is ignored for encoding; left for humans
+                parts = [p.strip() for p in header.split(" | ")]
+                desc = parts[0]
+                for p in parts[1:]:
+                    if p.upper().startswith("NUC="):
+                        val = p.split("=", 1)[1].strip().upper()
+                        if val in {"DNA", "RNA"}:
+                            nuc_hint = val
             else:
                 desc = header
         else:
@@ -126,34 +129,47 @@ def _parse_edit_text(text: str) -> List[Tuple[str, str]]:
     return records
 
 
+def _decide_nuc(seq: str, hint: Optional[str]) -> str:
+    if hint in {"DNA", "RNA"}:
+        return hint
+    return "RNA" if ("u" in seq or "U" in seq) else "DNA"
+
+
 def encode_text_to_fastb_bytes(text: str) -> bytes:
     """
-    Convert FASTB-EDIT-TXT text into aggregated FASTB bytes.
-
-    Returns:
-        bytes: Aggregated FASTB data suitable for writing to .fastb
+    Convert FASTB-EDIT-TXT text into FASTB bytes:
+      - v2 TLV with auto 2b/3b/4b per record by default
+      - If FASTB_LEGACY=1, emit v1 sentinel bitstream
     """
-    pairs = _parse_edit_text(text)  # [(desc, seq), ...]
-    # Build aggregate bitarray using your codec
-    from bitarray import bitarray
-    agg = bitarray()
-    for desc, seq in pairs:
-        rec_bits = fastb.fastb_transform(seq, "encode", desc)
-        agg.extend(rec_bits)
-    return agg.tobytes()
+    triples = _parse_edit_text(text)  # [(desc, seq, nuc_hint), ...]
+    records: List[Tuple[str, str, str]] = []
+    for desc, seq, hint in triples:
+        nuc = _decide_nuc(seq, hint)
+        # validate/choose encoding early to raise clear errors (e.g., amino acids)
+        _ = fastb._pick_encoding(seq)  # may raise ValueError
+        records.append((desc, seq, nuc))
+
+    legacy = os.getenv("FASTB_LEGACY", "0") == "1"
+    if legacy:
+        # Aggregate v1 bitstream
+        from bitarray import bitarray
+        agg = bitarray()
+        for desc, seq, _ in records:
+            rec_bits = fastb.fastb_transform(seq, "encode", desc)
+            agg.extend(rec_bits)
+        return agg.tobytes()
+
+    # v2 TLV with CRC (auto 2b/3b/4b handled by fastb2)
+    return fastb.fastb2_encode_records(records, include_legacy_v1=False)
 
 
 def validate_fastb_roundtrip(fastb_path: Path) -> None:
     """
     Decode newly written .fastb to ensure it's structurally valid.
-
-    Raises:
-        ValueError if file fails basic sanity checks.
     """
-    recs = fastb.read_fastb_file(str(fastb_path))
+    recs = fastb.read_fastb_auto(str(fastb_path))
     if not recs:
         raise ValueError("Validation failed: no records decoded.")
-    # trivial sanity: descriptions non-empty, lengths >= 1
     for i, (desc, seq, nuc) in enumerate(recs, start=1):
         if not isinstance(desc, str) or desc == "":
             raise ValueError(f"Validation failed: empty description at record {i}.")
@@ -163,9 +179,12 @@ def validate_fastb_roundtrip(fastb_path: Path) -> None:
             raise ValueError(f"Validation failed: invalid nucleotide type at record {i}: {nuc}")
 
 
+# -------------
+# Qt mainwindow
+# -------------
 class FastbEditor(QMainWindow):
     """
-    Tiny PyQt editor that decodes/encodes .fastb transparently.
+    Tiny PyQt editor that decodes/encodes .fastb transparently (v1+v2).
     """
 
     def __init__(self, path: Optional[Path] = None):
@@ -214,7 +233,7 @@ class FastbEditor(QMainWindow):
 
         m_file.addSeparator()
 
-        act_export = QAction("Export text…", self)
+        act_export = QAction("Export decoded text…", self)
         act_export.triggered.connect(self.action_export_text)
         m_file.addAction(act_export)
 
@@ -255,10 +274,7 @@ class FastbEditor(QMainWindow):
             self.save_to_fastb(self._fastb_path)
 
     def action_save_as(self):
-        if self._fastb_path is None:
-            default = os.path.expanduser("~/untitled.fastb")
-        else:
-            default = str(self._fastb_path)
+        default = str(self._fastb_path) if self._fastb_path else os.path.expanduser("~/untitled.fastb")
         path, _ = QFileDialog.getSaveFileName(self, "Save .fastb", default, "FASTB (*.fastb)")
         if not path:
             return
@@ -316,11 +332,17 @@ class FastbEditor(QMainWindow):
             if path.exists():
                 backup = path.with_suffix(path.suffix + ".bak")
                 backup.write_bytes(path.read_bytes())
-            # write via your helper for consistency
-            from bitarray import bitarray
-            ba = bitarray()
-            ba.frombytes(data)
-            fastb.save_bitarray_to_file(ba, str(path))
+
+            if os.getenv("FASTB_LEGACY", "0") == "1":
+                # v1 bitstream path
+                from bitarray import bitarray
+                ba = bitarray()
+                ba.frombytes(data)
+                fastb.save_bitarray_to_file(ba, str(path))
+            else:
+                # v2 bytes path
+                fastb.save_bytes_to_file(data, str(path))
+
         except Exception as e:
             self._error(f"Failed to write .fastb: {path}", e)
             return
