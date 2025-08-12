@@ -117,13 +117,13 @@ Binary Diad encoding: 00 10 01 11 (8 bits total)
 ### Example Short-Sequence (i.e. single fungal ITS)
 
 <div align="center">
-  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="500">
+  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="800">
 </div>
 
 ### Example Long-Sequence (i.e. full fungal genome)
 
 <div align="center">
-  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="500">
+  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="800">
 </div>
 
 ---
