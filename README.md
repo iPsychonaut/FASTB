@@ -1,85 +1,155 @@
-# Binary-Nucleotide-Encoding
-A method for encoding data from FASTA files (or other Nucleotide raw data) into a more size efficient file
+<div align="center">
+  <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="1000">
+</div>
 
+# FASTB — Binary Nucleotide Encoding (v2.1)
 
-FASTA FILE ENCODING - ASCII:
-In ASCII encoding, each character is represented by a single byte, which is a sequence of 8 bits. Since there are only 128 characters in the ASCII character set, each character can be represented by a unique combination of 7 bits (2^7 = 128).
+**FASTB** is a binary file format for storing nucleotide sequence data from FASTA in a more **size-efficient** and **CPU-friendly** way.  
 
-For example, the ASCII encoding of the letter "A" is the binary sequence 01000001. This corresponds to the decimal value 65, which is the ASCII code for the letter "A". Similarly, the ASCII encoding of the letter "B" is the binary sequence 01000010, which corresponds to the decimal value 66.
+Instead of encoding nucleotides as ASCII characters (8-bits each), FASTB stores them in compact 2-bit, 3-bit, or 4-bit encodings depending on the sequence complexity.  
 
-Since each character is represented by a single byte in ASCII encoding, the size of an ASCII-encoded file is directly proportional to the number of characters in the file. For example, a text file containing 1000 ASCII characters will have a file size of 1000 bytes.
+---
 
+## Why FASTB Matters
 
-ENCODING SCHEMES:
-DEGENERATE ENCODING (Tetrad 4-bit per nucleotide)
+FASTA files are simple and human-readable, but they are **inefficient** for computational workflows:
+
+- **High storage overhead**: Each base takes 8 bits in ASCII, even though only 4–16 symbols are used.
+- **CPU waste**: Every FASTA compression and decompression requires resources and time.
+- **Poor I/O performance**: More disk space → more read/write operations → more time spent loading data.
+
+FASTB solves these issues by storing nucleotides in binary directly — meaning:
+
+1. **Smaller file sizes without compression**
+   - Typical genome FASTA → FASTB reduction: ~60–75% in size  
+   - No gzip/bzip2 decompression step needed
+
+2. **Faster I/O throughput**
+   - Hypothetical gain:  
+     - If your pipeline spends 20% of runtime loading/parsing FASTA,  
+       and binary load is ~4× faster, total runtime could drop by **5–10%**.
+
+3. **Reduced RAM footprint**
+   - Less memory needed to store sequences in memory buffers.
+
+4. **Improved data locality**
+   - Binary storage aligns more closely with CPU cache line sizes.
+
+5. **Built-in encoding flexibility**
+   - Can represent confidence levels and degenerate bases without extra storage cost.
+
+---
+
+## Encoding Modes
+
+FASTB supports three encoding schemes depending on the input sequence:
+
+### 1. **Simple Encoding** — Diad (2 bits / nucleotide)
+For uppercase ATCG(U) only.
+| ASCII Binary (8-bit) | Binary Diad (2-bit) | Base | Description |
+|----------------------|---------------------|------|-------------|
+| 01010100 | 00 | T | Thymine |
+| 01010101 | 00 | U | Uracil |
+| 01000001 | 10 | A | Adenosine |
+| 01000011 | 01 | C | Cytosine |
+| 01000111 | 11 | G | Guanine |
+
+First bit = Purine/Pyrimidine, Second bit = Hydrogen bonds (2→0, 3→1).
+
+---
+
+### 2. **Confidence Encoding** — Triad (3 bits / nucleotide)
+For upper/lowercase ATCG(U), where case = confidence level.
+| ASCII Binary | Binary Triad | Base | Description |
+|--------------|--------------|------|-------------|
+| 01010100 | 000 | T | Thymine (high) |
+|            | 100 | t | Thymine (low) |
+| 01010101 | 000 | U | Uracil (high) |
+|            | 100 | u | Uracil (low) |
+| 01000001 | 010 | A | Adenosine (high) |
+|            | 110 | a | Adenosine (low) |
+| 01000011 | 001 | C | Cytosine (high) |
+|            | 101 | c | Cytosine (low) |
+| 01000111 | 011 | G | Guanine (high) |
+|            | 111 | g | Guanine (low) |
+
+First bit = Confidence (1 high, 0 low), remaining bits = Diad code.
+
+---
+
+### 3. **Degenerate Encoding** — Tetrad (4 bits / nucleotide)
+Supports IUPAC degenerate codes.
 | ASCII Binary (8-bit) | Binary Tetrad (4-bit) | Representative Character | Description |
 |----------------------|-----------------------|--------------------------|-------------|
 | 01011111 | 0000 | - | Dash
 | 00100000 | 0000 |   | Blank
-| 01010100 | 0001 | T | Thymine
-| 01010101 | 0001 | U | Uracil
-| 01000001 | 0010 | A | Adenosine
-| 01000011 | 0100 | C | Cytosine
-| 01000111 | 1000 | G | Guanine
-| 01010111 | 0011 | W | A/T
-| 01010011 | 1100 | S | C/G
-| 01001101 | 0110 | M | A/C
-| 01001011 | 1001 | K | G/T
-| 01010010 | 1010 | R | A/G
-| 01011001 | 0101 | Y | C/T
-| 01000010 | 1101 | B | Not A
-| 01000100 | 1011 | D | Not C
-| 01001000 | 0111 | H | Not G
-| 01010110 | 1100 | V | Not T
+| 01010100 | 0100 | T | Thymine
+| 01010101 | 0100 | U | Uracil
+| 01000001 | 1000 | A | Adenosine
+| 01000011 | 0010 | C | Cytosine
+| 01000111 | 0001 | G | Guanine
+| 01010111 | 1100 | W | A/T
+| 01010011 | 0011 | S | C/G
+| 01001101 | 1010 | M | A/C
+| 01001011 | 0101 | K | G/T
+| 01010010 | 1001 | R | A/G
+| 01011001 | 0110 | Y | C/T
+| 01000010 | 0111 | B | Not A
+| 01000100 | 1101 | D | Not C
+| 01001000 | 1110 | H | Not G
+| 01010110 | 1011 | V | Not T
 | 01001110 | 1111 | N | Any
 
+Each bit position corresponds to presence/absence of A, T(U), C, G.
 
-CONFIDENCE ENCODING (Triad 3-bit per nucleotide)
-| ASCII Binary (8-bit) | Binary Triad (3-bit) | Representative Character | Description |
-|----------------------|----------------------|--------------------------|-------------|
-| 01010100 | 000 | T | Thymine
-| 	       | 100 | t | (Thymine)
-| 01010101 | 000 | U | Uracil
-|          | 100 | u | (Uracil)
-| 01000001 | 001 | A | Adenosine
-|          | 101 | a | (Adenosine)
-| 01000011 | 010 | C | Cytosine
-|          | 110 | c | (Cytosine)
-| 01000111 | 011 | G | Guanine
-|          | 111 | g | (Guanine)
+---
 
+## Example: Storage Savings
 
-SIMPLE ENCODING (Diad 2-bit per nucleotide)
-| ASCII Binary (8-bit) | Binary Diad (2-bit) | Representative Character | Description |
-|----------------------|---------------------|--------------------------|-------------|
-| 01010100 | 00 | T | Thymine
-| 01010101 | 00 | U | Uracil
-| 01000001 | 01 | A | Adenosine
-| 01000011 | 10 | C | Cytosine
-| 01000111 | 11 | G | Guanine
+Sequence `"TACG"` in ASCII: 01010100 01000001 01000011 01000111 (32 bits total)
 
+Binary Tetrad encoding: 0100 1000 0010 0001 (16 bits total)
 
-Sequence of "TACG" would normally get encoded in ASCII as "01010100010000010100001101000111" (32 bits)
+Binary Diad encoding: 00 10 01 11 (8 bits total)
 
-With the proposed Binary Tetrad encoding the same sequence would be at largest "0001001001001000" (16-bits), at the smallest "00011011" (8-bits)
+**Reduction:** From 32 bits → 8 bits (75% smaller).
 
-Furthermore there are applications of each encoding structure that can be applied to provide deeper insight or alternative workflows as well. For the Degenerate Encoding we can then consider that each nucleotide binary tetrad consists of four values T => [0,0,0,1], which is perfectly size to be representative of pixel information (r,g,b,a). So we can then encode a single row of pixels where each value in the rgba-array holds the nucleotide information. We can then use an already small image format like PNG to reduce the file size significantly.
+### Example Short-Sequence (i.e. single fungal ITS)
 
+<div align="center">
+  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="500">
+</div>
 
-GRAPHICAL SIZE COMPARISONS:
-![alt text](Resources/Images/hundred_bp_comp.png)
+### Example Long-Sequence (i.e. full fungal genome)
 
-Notice the file size redction is only to 2/3 the original file. This is due to the Description information taking up more data than the Sequence.
+<div align="center">
+  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="500">
+</div>
 
-![alt text](Resources/Images/thousand_bp_comp.png)
+---
 
-As the Sequence length increases; file size reduction can easily break 1/2 the original file size!
+## v2.1 Updates
 
-![alt text](Resources/Images/million_bp_comp.png)
+- **Refined encoding marker system**  
+  - Now each record has an explicit encoding marker for decoding without guessing.
+- **Improved I/O pipeline**  
+  - Sequential read/write optimizations.
+- **Error handling**  
+  - Rejects unsupported amino acid FASTA files with a clear message.
+- **Cleaner separation** of metadata, encoding marker, sequence, and record terminator.
+- **Standalone Editor** usefule for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
+- **HTML Implementation** usefule for pulling out or saving sequences for use in other applications; client side and on via web-interface.
 
-The longer the sequences get the closer towards compression level file sizes can be achieved.
+---
 
+## Planned Expansion
 
-AREAS OF EXPANSION (WIP):
-.fastq (Illumina), .fasta with ascii codes phred32/phred64 base calling meta-quality-data with spacer lines, a 4 line file 1) Header, 2) Quality, 3) Bases, 4) Spacer Line
-.fast5 (Nanopore), .fastq with pore data There are 3 main branches of data stored in the fast
+- **FASTQ (Illumina)** with integrated quality score encoding  
+- **FAST5 (Nanopore)** sequence embedding  
+- **Image-based storage**: Encode nucleotide bits directly into RGBA pixel channels for steganographic + redundant data storage.
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
