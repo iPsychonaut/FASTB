@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastb"
+version = "3.0.0"
+description = "FASTB v3: binary sequence format"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Ian M. Bollinger", email = "ian.bollinger@entheome.org"}]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+fastb = "fastb.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fastb*"]
