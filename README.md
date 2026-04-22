@@ -2,154 +2,108 @@
   <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="1000">
 </div>
 
-# FASTB — Binary Nucleotide Encoding (v2.1)
+# FASTB
 
-**FASTB** is a binary file format for storing nucleotide sequence data from FASTA in a more **size-efficient** and **CPU-friendly** way.  
-
-Instead of encoding nucleotides as ASCII characters (8-bits each), FASTB stores them in compact 2-bit, 3-bit, or 4-bit encodings depending on the sequence complexity.  
+Binary sequence format. Compact, self-describing, and fast. Today for DNA and RNA; amino-acid support is planned under the same format.
 
 ---
 
-## Why FASTB Matters
+## What it is
 
-FASTA files are simple and human-readable, but they are **inefficient** for computational workflows:
-
-- **High storage overhead**: Each base takes 8 bits in ASCII, even though only 4–16 symbols are used.
-- **CPU waste**: Every FASTA compression and decompression requires resources and time.
-- **Poor I/O performance**: More disk space → more read/write operations → more time spent loading data.
-
-FASTB solves these issues by storing nucleotides in binary directly — meaning:
-
-1. **Smaller file sizes without compression**
-   - Typical genome FASTA → FASTB reduction: ~60–75% in size  
-   - No gzip/bzip2 decompression step needed
-
-2. **Faster I/O throughput**
-   - Hypothetical gain:  
-     - If your pipeline spends 20% of runtime loading/parsing FASTA,  
-       and binary load is ~4× faster, total runtime could drop by **5–10%**.
-
-3. **Reduced RAM footprint**
-   - Less memory needed to store sequences in memory buffers.
-
-4. **Improved data locality**
-   - Binary storage aligns more closely with CPU cache line sizes.
-
-5. **Built-in encoding flexibility**
-   - Can represent confidence levels and degenerate bases without extra storage cost.
+FASTB v3 is a sequence container with bit-packed payloads and a human-readable structural layer. Each record has an ASCII header (readable with `grep`, `tail`, or any text editor) and a compact binary payload. A footer index provides O(1) random access by record name.
 
 ---
 
-## Encoding Modes
+## Why not FASTA
 
-FASTB supports three encoding schemes depending on the input sequence:
+| | FASTA.gz | FASTB v3 |
+|---|---|---|
+| Size (typical mammalian genome) | ~900 MB | ~750 MB |
+| Parsing | Decompress + ASCII→code | Table lookup per byte |
+| Speed | Baseline | ~4–10× faster |
+| Random access by name | Requires index tool | Built-in footer index |
+| Self-describing | No | Yes (ASCII header per record) |
 
-### 1. **Simple Encoding** — Diad (2 bits / nucleotide)
-For uppercase ATCG(U) only.
-| ASCII Binary (8-bit) | Binary Diad (2-bit) | Base | Description |
-|----------------------|---------------------|------|-------------|
-| 01010100 | 00 | T | Thymine |
-| 01010101 | 00 | U | Uracil |
-| 01000001 | 10 | A | Adenosine |
-| 01000011 | 01 | C | Cytosine |
-| 01000111 | 11 | G | Guanine |
-
-First bit = Purine/Pyrimidine, Second bit = Hydrogen bonds (2→0, 3→1).
+The size win is real but modest. The speed and structure win is substantial.
 
 ---
 
-### 2. **Confidence Encoding** — Triad (3 bits / nucleotide)
-For upper/lowercase ATCG(U), where case = confidence level.
-| ASCII Binary | Binary Triad | Base | Description |
-|--------------|--------------|------|-------------|
-| 01010100 | 000 | T | Thymine (high) |
-|            | 100 | t | Thymine (low) |
-| 01010101 | 000 | U | Uracil (high) |
-|            | 100 | u | Uracil (low) |
-| 01000001 | 010 | A | Adenosine (high) |
-|            | 110 | a | Adenosine (low) |
-| 01000011 | 001 | C | Cytosine (high) |
-|            | 101 | c | Cytosine (low) |
-| 01000111 | 011 | G | Guanine (high) |
-|            | 111 | g | Guanine (low) |
+## Quick start
 
-First bit = Confidence (1 high, 0 low), remaining bits = Diad code.
+```bash
+pip install -e .
+
+fastb encode genome.fasta          # → genome.fastb
+fastb head genome.fastb            # first 5 records as FASTA
+fastb extract genome.fastb chr1    # random-access by name
+fastb stats genome.fastb           # per-record statistics
+fastb verify genome.fastb          # integrity check
+fastb decode genome.fastb          # back to FASTA
+```
 
 ---
 
-### 3. **Degenerate Encoding** — Tetrad (4 bits / nucleotide)
-Supports IUPAC degenerate codes.
-| ASCII Binary (8-bit) | Binary Tetrad (4-bit) | Representative Character | Description |
-|----------------------|-----------------------|--------------------------|-------------|
-| 01011111 | 0000 | - | Dash
-| 00100000 | 0000 |   | Blank
-| 01010100 | 0100 | T | Thymine
-| 01010101 | 0100 | U | Uracil
-| 01000001 | 1000 | A | Adenosine
-| 01000011 | 0010 | C | Cytosine
-| 01000111 | 0001 | G | Guanine
-| 01010111 | 1100 | W | A/T
-| 01010011 | 0011 | S | C/G
-| 01001101 | 1010 | M | A/C
-| 01001011 | 0101 | K | G/T
-| 01010010 | 1001 | R | A/G
-| 01011001 | 0110 | Y | C/T
-| 01000010 | 0111 | B | Not A
-| 01000100 | 1101 | D | Not C
-| 01001000 | 1110 | H | Not G
-| 01010110 | 1011 | V | Not T
-| 01001110 | 1111 | N | Any
+## What's in the file
 
-Each bit position corresponds to presence/absence of A, T(U), C, G.
+```
+##FASTB 3.0                              ← magic line, identifies format
+# optional comments
+>chr1    LEN=248956422  ENC=2  ALPHA=DNA  CRC=4a3c1b2d  BYTES=62239106
+<62239106 payload bytes>
+>chr2    ...
+...
+chr1    85    248956422                  ← footer index (plain text)
+chr2    ...
+##INDEX    ENTRIES=24  OFFSETS_START=...
+##END      FILE_CRC=...
+```
+
+Full specification: [docs/FASTB_v3_spec.md](docs/FASTB_v3_spec.md)
 
 ---
 
-## Example: Storage Savings
+## CLI subcommands
 
-Sequence `"TACG"` in ASCII: 01010100 01000001 01000011 01000111 (32 bits total)
+| Subcommand | Description |
+|---|---|
+| `encode <file.fasta>` | Convert FASTA → FASTB. Detects and rejects protein sequences. |
+| `decode <file.fastb>` | Convert FASTB → FASTA. |
+| `view <file.fastb>` | Stream records as FASTA. Supports `--names` filter and index-based access. |
+| `head <file.fastb>` | Print the first N records (default 5). |
+| `extract <file.fastb> <name>...` | Random-access extraction by record name. |
+| `stats <file.fastb>` | Per-record statistics: length, alpha, GC%, N%, masked%. |
+| `verify <file.fastb>` | Check magic, CRCs, and index consistency. |
 
-Binary Tetrad encoding: 0100 1000 0010 0001 (16 bits total)
-
-Binary Diad encoding: 00 10 01 11 (8 bits total)
-
-**Reduction:** From 32 bits → 8 bits (75% smaller).
-
-### Example Short-Sequence (i.e. single fungal ITS)
-
-<div align="center">
-  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="900">
-</div>
-
-### Example Long-Sequence (i.e. full fungal genome)
-
-<div align="center">
-  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="900">
-</div>
+Run `fastb <subcommand> --help` for options.
 
 ---
 
-## v2.1 Updates
+## Supported content
 
-- **Refined encoding marker system**  
-  - Now each record has an explicit encoding marker for decoding without guessing.
-- **Improved I/O pipeline**  
-  - Sequential read/write optimizations.
-- **Error handling**  
-  - Rejects unsupported amino acid FASTA files with a clear message.
-- **Cleaner separation** of metadata, encoding marker, sequence, and record terminator.
-- **Standalone Editor** useful for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
-- **HTML Implementation** useful for pulling out or saving sequences for use in other applications; client side and on via web-interface.
+- **DNA**: A, C, G, T plus IUPAC degenerate codes (W S M K R Y B D H V N) and gap (`-`).
+- **RNA**: A, C, G, U plus IUPAC degenerate codes and gap.
+- **Amino acids**: detected and rejected with a clear error (exit code 4). The file format reserves `ALPHA=AA` for amino-acid records; AA codec support is planned for a future release under the same `.fastb` extension, CLI, and tooling. FASTB is a unified format — there will be no sister protein format.
 
 ---
 
-## Planned Expansion
+## Alphabet detection
 
-- **FASTQ (Illumina)** with integrated quality score encoding  
-- **FAST5 (Nanopore)** sequence embedding  
-- **Image-based storage**: Encode nucleotide bits directly into RGBA pixel channels for steganographic + redundant data storage.
+`fastb encode` classifies each record's alphabet before writing:
+
+- **Hard reject**: sequences containing `F I L P Q E Z` are amino acids (these letters are not in the IUPAC nucleotide alphabet). Exit code 4.
+- **Heuristic reject**: sequences ≥20 bases long with >5% IUPAC-degenerate codes (`W S M K R Y B D H V`, excluding N) are almost certainly proteins (e.g. silk-fibroin motifs). Exit code 4. Bypassable with `--force-nucleotide`.
+- `--force-nucleotide` skips the heuristic but never bypasses the hard-letter check.
+
+---
+
+## Roadmap
+
+- Amino-acid sequence support (ALPHA=AA codec, same format and CLI)
+- FASTQ equivalent with quality scores
+- Nanopore FAST5 integration
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
