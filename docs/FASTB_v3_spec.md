@@ -2,7 +2,7 @@
 
 **Document version:** v3.0 draft (ALPHA field, 2026-04-21)
 **Status:** Draft specification.
-**Goal:** A sequence container with compact bit-packed payload, a fully human-readable structural layer, explicit self-description, and O(1) random access. Nucleotide content (DNA and RNA) is supported in this release. Amino-acid support is planned; the `ALPHA=AA` value is reserved in the file format.
+**Goal:** A sequence container with compact bit-packed payload, a fully human-readable structural layer, explicit self-description, and O(1) random access. Nucleotide content (DNA and RNA) is supported in this release. Amino-acid support is planned; the `ALPHA=P` value is reserved in the file format.
 
 ## 1. Design principles
 
@@ -47,16 +47,16 @@ Earlier versions of FASTB did not have a magic line at byte 0, which is why vers
 ### 4.1 Record header line
 
 ```
->NAME\tLEN=<n>\tENC=<2|4>\tALPHA=<DNA|RNA>\tCRC=<hex8>\tBYTES=<n>[\tMASK=<runs>][\tK=V ...]\n
+>NAME\tLEN=<n>\tENC=<2|4>\tALPHA=<D|R|P>\tCRC=<hex8>\tBYTES=<n>[\tMASK=<runs>][\tK=V ...]\n
 ```
 
 - `NAME`: sequence identifier. MUST NOT contain `\t`, ` `, `\n`, or `>`. Unicode permitted otherwise.
 - `LEN`: number of bases in the sequence (decimal).
 - `ENC`: encoding used — `2` for pure ACGT/ACGU, `4` for any degenerate or gap.
 - `ALPHA`: indicates the alphabet of the record's sequence. Defined values:
-  - `DNA` — nucleotide sequence in the DNA alphabet (A, C, G, T, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `T`.
-  - `RNA` — nucleotide sequence in the RNA alphabet (A, C, G, U, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `U`.
-  - `AA` — amino-acid sequence (RESERVED for a future release; decoders in this release MUST reject records with `ALPHA=AA`, producing a clear error message).
+  - `D` — DNA: nucleotide sequence in the DNA alphabet (A, C, G, T, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `T`.
+  - `R` — RNA: nucleotide sequence in the RNA alphabet (A, C, G, U, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `U`.
+  - `P` — Protein: amino-acid sequence (RESERVED for a future release; decoders in this release MUST reject records with `ALPHA=P`, producing a clear error message).
 
   No mixed T/U within a single record — the format enforces a single alphabet per record.
 
@@ -165,7 +165,7 @@ Honest headline: **FASTB v3 trades a small size win for a large speed-and-struct
 
 FASTB is a unified format for biological sequences. Amino-acid support is planned for a future release under the same `.fastb` extension, magic line, CLI, and tooling.
 
-In this release, the `ALPHA=AA` header value is **reserved**. Decoders MUST reject any record with `ALPHA=AA` with a clear error message. Encoders MUST NOT write `ALPHA=AA` records until the AA codec is published.
+In this release, the `ALPHA=P` header value is **reserved**. Decoders MUST reject any record with `ALPHA=P` with a clear error message. Encoders MUST NOT write `ALPHA=P` records until the AA codec is published.
 
 The alphabet dispatch layer (`fastb/alphabet.py`) is already structured to accept a future `require_protein` path alongside `require_nucleotide`. Adding AA support will be additive — it will not require changing the file format, the magic line, or the CLI's public interface.
 
@@ -186,7 +186,7 @@ v3 fix: `ALPHA` is authoritative on encode; mixed T/U within a record is rejecte
 
 **2. Protein sequences are silently accepted if they happen to use only letters that overlap the IUPAC nucleotide alphabet.** The set `A C G H K M N R S T V W Y D B` is legal in v2's 4-bit mode — but those are also valid amino acid one-letter codes. A peptide like `GAGAGSGAGAGS` (a real silk fibroin motif) encodes cleanly as "nucleotides" and decodes back unchanged. The README's claim that "unsupported amino acid FASTA files" are rejected is only true for proteins containing `F`, `I`, `L`, `P`, `Q`, `E`, or `Z`.
 
-v3 fix: explicit alphabet declaration in `ALPHA=DNA|RNA`, plus a content heuristic in the reference encoder that rejects sequences ≥20 bases long with >5% IUPAC-degenerate characters (`W S M K R Y B D H V`). Real nucleotide sequences are overwhelmingly `ACGT[U]` with occasional `N`; >5% degenerate is a near-certain protein signal. The silk-fibroin `GAGAGS` motif, BSA signal peptides, and W-rich peptides all correctly reject under this rule. Short sequences (<20 bases) bypass the heuristic to avoid false positives on primers and adapters.
+v3 fix: explicit alphabet declaration in `ALPHA=D|R|P`, plus a content heuristic in the reference encoder that rejects sequences ≥20 bases long with >5% IUPAC-degenerate characters (`W S M K R Y B D H V`). Real nucleotide sequences are overwhelmingly `ACGT[U]` with occasional `N`; >5% degenerate is a near-certain protein signal. The silk-fibroin `GAGAGS` motif, BSA signal peptides, and W-rich peptides all correctly reject under this rule. Short sequences (<20 bases) bypass the heuristic to avoid false positives on primers and adapters.
 
 **3. CRC-as-end-of-record heuristic is fragile.** The v2 decoder has no END_RECORD marker in the emitted output (the `_END_RECORD = 0xFE` constant is defined but never written). Instead it reads 4 bytes after each TLV and checks if they form a valid CRC; if not, seeks back and reads another TLV. This doubles I/O, creates subtle coupling for future TLV types, and produces confusing error messages when tampering occurs mid-record (e.g. `UnicodeDecodeError` instead of `CRC mismatch`).
 

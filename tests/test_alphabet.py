@@ -36,15 +36,15 @@ def test_detect_alphabet(seq, expected):
 # ---------------------------------------------------------------------------
 
 def test_require_nucleotide_valid_dna():
-    require_nucleotide("ACGTACGT", "DNA", "rec")  # should not raise
+    require_nucleotide("ACGTACGT", "D", "rec")  # should not raise
 
 
 def test_require_nucleotide_valid_rna():
-    require_nucleotide("ACGUACGU", "RNA", "rec")
+    require_nucleotide("ACGUACGU", "R", "rec")
 
 
 def test_require_nucleotide_with_degenerates():
-    require_nucleotide("ACGTWSMKRYBDHVN", "DNA", "rec")
+    require_nucleotide("ACGTWSMKRYBDHVN", "D", "rec")
 
 
 # ---------------------------------------------------------------------------
@@ -53,24 +53,24 @@ def test_require_nucleotide_with_degenerates():
 
 def test_require_nucleotide_rejects_hard_letter():
     with pytest.raises(ProteinDetectedError, match="amino acid"):
-        require_nucleotide("FILPQEZACGT", "DNA", "test_rec")
+        require_nucleotide("FILPQEZACGT", "D", "test_rec")
 
 
 def test_require_nucleotide_rejects_heuristic_protein():
     # GAGAGSGAGAGS... repeated to be >= PROTEIN_HEURISTIC_MIN_LENGTH
     seq = "GAGAGS" * 5  # len=30; S fraction = 5/30 ≈ 16.7% > 5%
     with pytest.raises(ProteinDetectedError, match="heuristic"):
-        require_nucleotide(seq, "DNA", "silk")
+        require_nucleotide(seq, "D", "silk")
 
 
 def test_force_nucleotide_bypasses_heuristic():
     """--force-nucleotide must skip the heuristic but NOT the hard-letter check."""
     seq = "GAGAGS" * 5
-    require_nucleotide(seq, "DNA", "silk", force_nucleotide=True)  # should not raise
+    require_nucleotide(seq, "D", "silk", force_nucleotide=True)  # should not raise
 
     # Hard letters still rejected even with force_nucleotide
     with pytest.raises(ProteinDetectedError):
-        require_nucleotide("FILPQEZ" + seq, "DNA", "silk", force_nucleotide=True)
+        require_nucleotide("FILPQEZ" + seq, "D", "silk", force_nucleotide=True)
 
 
 # ---------------------------------------------------------------------------
@@ -79,17 +79,17 @@ def test_force_nucleotide_bypasses_heuristic():
 
 def test_require_nucleotide_rejects_mixed_tu():
     with pytest.raises(AlphabetError, match="both T and U"):
-        require_nucleotide("ACGTUACGT", "DNA", "rec")
+        require_nucleotide("ACGTUACGT", "D", "rec")
 
 
 def test_require_nucleotide_rejects_dna_with_u():
-    with pytest.raises(AlphabetError, match="ALPHA=DNA"):
-        require_nucleotide("ACGUACGU", "DNA", "rec")
+    with pytest.raises(AlphabetError, match="ALPHA=D"):
+        require_nucleotide("ACGUACGU", "D", "rec")
 
 
 def test_require_nucleotide_rejects_rna_with_t():
-    with pytest.raises(AlphabetError, match="ALPHA=RNA"):
-        require_nucleotide("ACGTACGT", "RNA", "rec")
+    with pytest.raises(AlphabetError, match="ALPHA=R"):
+        require_nucleotide("ACGTACGT", "R", "rec")
 
 
 # ---------------------------------------------------------------------------

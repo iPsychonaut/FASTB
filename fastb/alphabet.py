@@ -66,7 +66,7 @@ def detect_alphabet(seq_upper: str) -> str:
 
     Returned strings are lowercase category labels used internally.
     They are NOT the same as the file-format ALPHA= values (which are
-    uppercase: DNA, RNA, AA). This case split is intentional — it keeps
+    single letters: D, R, P). This case split is intentional — it keeps
     "classifier decided" distinct from "header field value".
 
     Rules, in priority order:
@@ -140,7 +140,7 @@ def require_nucleotide(
 
     Args:
         seq_upper: uppercased sequence string.
-        declared_alpha: "DNA" or "RNA" from the Record.
+        declared_alpha: "D" or "R" from the Record.
         name: record name, used in error messages.
         force_nucleotide: if True, skip the degenerate-fraction heuristic
             (rule 3 in detect_alphabet). Does NOT bypass the hard-letter
@@ -160,23 +160,23 @@ def require_nucleotide(
     if "T" in seq_upper and "U" in seq_upper:
         raise AlphabetError(
             f"Record {name!r}: contains both T and U. FASTB v3 requires a single "
-            f"nucleotide alphabet per record (ALPHA=DNA uses T, ALPHA=RNA uses U)."
+            f"nucleotide alphabet per record (ALPHA=D uses T, ALPHA=R uses U)."
         )
 
     # Declared-vs-content mismatch
-    if declared_alpha == "DNA" and "U" in seq_upper:
+    if declared_alpha == "D" and "U" in seq_upper:
         raise AlphabetError(
-            f"Record {name!r}: declared ALPHA=DNA but sequence contains U. "
-            f"Declare ALPHA=RNA or convert U to T before encoding."
+            f"Record {name!r}: declared ALPHA=D but sequence contains U. "
+            f"Declare ALPHA=R or convert U to T before encoding."
         )
-    if declared_alpha == "RNA" and "T" in seq_upper:
+    if declared_alpha == "R" and "T" in seq_upper:
         raise AlphabetError(
-            f"Record {name!r}: declared ALPHA=RNA but sequence contains T. "
-            f"Declare ALPHA=DNA or convert T to U before encoding."
+            f"Record {name!r}: declared ALPHA=R but sequence contains T. "
+            f"Declare ALPHA=D or convert T to U before encoding."
         )
 
     # Illegal characters
-    legal = _LEGAL_DNA if declared_alpha == "DNA" else _LEGAL_RNA
+    legal = _LEGAL_DNA if declared_alpha == "D" else _LEGAL_RNA
     for ch in seq_upper:
         if ch not in legal:
             raise AlphabetError(

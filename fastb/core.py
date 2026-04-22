@@ -8,7 +8,7 @@ File layout at a glance:
 
     ##FASTB 3.0                              <- magic line, byte 0
     # optional file comments
-    >chr1  LEN=12  ENC=2  ALPHA=DNA  CRC=...  BYTES=3
+    >chr1  LEN=12  ENC=2  ALPHA=D  CRC=...  BYTES=3
     <3 payload bytes>
     \n
     >chr2  ...
@@ -67,16 +67,16 @@ class Record:
         self,
         name: str,
         sequence: str,
-        alpha: str = "DNA",
+        alpha: str = "D",
         mask: Optional[List[Tuple[int, int]]] = None,
         comment: Optional[str] = None,
     ):
         if "\t" in name or " " in name or "\n" in name or name.startswith(">"):
             raise ValueError("name must not contain whitespace, newline, or '>'")
-        if alpha not in ("DNA", "RNA"):
+        if alpha not in ("D", "R"):
             raise ValueError(
-                f"alpha must be 'DNA' or 'RNA'; got {alpha!r}. "
-                f"('AA' is reserved for a future release.)"
+                f"alpha must be 'D' (DNA) or 'R' (RNA); got {alpha!r}. "
+                f"('P' is reserved for protein in a future release.)"
             )
         self.name = name
         self.sequence = sequence
@@ -94,7 +94,7 @@ class Record:
 
 def _pick_encoding(seq_upper: str, alpha: str) -> int:
     """Choose 2 (if sequence is pure ACGT or ACGU) or 4 (any degenerate/gap)."""
-    basic = "ACGT" if alpha == "DNA" else "ACGU"
+    basic = "ACGT" if alpha == "D" else "ACGU"
     return 2 if all(ch in basic for ch in seq_upper) else 4
 
 
@@ -111,7 +111,7 @@ def _pack2(seq_upper: str) -> bytes:
 
 
 def _unpack2(payload: bytes, length: int, alpha: str) -> str:
-    table = _UNPACK2_DNA if alpha == "DNA" else _UNPACK2_RNA
+    table = _UNPACK2_DNA if alpha == "D" else _UNPACK2_RNA
     out = []
     for i in range(length):
         bi = i // 4
@@ -136,7 +136,7 @@ def _pack4(seq_upper: str) -> bytes:
 
 
 def _unpack4(payload: bytes, length: int, alpha: str) -> str:
-    table = _UNPACK4_DNA if alpha == "DNA" else _UNPACK4_RNA
+    table = _UNPACK4_DNA if alpha == "D" else _UNPACK4_RNA
     out = []
     for i in range(length):
         bi = i // 2
@@ -314,11 +314,11 @@ def read_file(src) -> Iterator[Record]:
             raise ValueError(
                 f"Record {fields['NAME']!r}: missing ALPHA field in header."
             )
-        if alpha not in ("DNA", "RNA"):
+        if alpha not in ("D", "R"):
             raise ValueError(
                 f"Record {fields['NAME']!r}: ALPHA={alpha} is not supported by "
-                f"this fastb version. Known values: DNA, RNA. "
-                f"(AA is reserved for a future release.)"
+                f"this fastb version. Known values: D (DNA), R (RNA). "
+                f"(P is reserved for protein in a future release.)"
             )
         expected_crc = int(fields["CRC"], 16)
         byte_len = int(fields["BYTES"])
@@ -442,9 +442,9 @@ def read_record(path: str, name: str) -> Record:
 
 if __name__ == "__main__":
     recs = [
-        Record("chr1", "ACGTACGTACGT", alpha="DNA", comment="Simple test record"),
-        Record("chr2", "ACGTacgtNNNN", alpha="DNA", comment="Has lowercase and N"),
-        Record("mito", "ACGUACGU", alpha="RNA"),
+        Record("chr1", "ACGTACGTACGT", alpha="D", comment="Simple test record"),
+        Record("chr2", "ACGTacgtNNNN", alpha="D", comment="Has lowercase and N"),
+        Record("mito", "ACGUACGU", alpha="R"),
     ]
 
     buf = io.BytesIO()

@@ -48,7 +48,7 @@ fastb decode genome.fastb          # back to FASTA
 ```
 ##FASTB 3.0                              ← magic line, identifies format
 # optional comments
->chr1    LEN=248956422  ENC=2  ALPHA=DNA  CRC=4a3c1b2d  BYTES=62239106
+>chr1    LEN=248956422  ENC=2  ALPHA=D  CRC=4a3c1b2d  BYTES=62239106
 <62239106 payload bytes>
 >chr2    ...
 ...
@@ -82,7 +82,7 @@ Run `fastb <subcommand> --help` for options.
 
 - **DNA**: A, C, G, T plus IUPAC degenerate codes (W S M K R Y B D H V N) and gap (`-`).
 - **RNA**: A, C, G, U plus IUPAC degenerate codes and gap.
-- **Amino acids**: detected and rejected with a clear error (exit code 4). The file format reserves `ALPHA=AA` for amino-acid records; AA codec support is planned for a future release under the same `.fastb` extension, CLI, and tooling. FASTB is a unified format — there will be no sister protein format.
+- **Amino acids** (`ALPHA=P`): detected and rejected with a clear error (exit code 4). The file format reserves `ALPHA=P` for protein records; protein codec support is planned for a future release under the same `.fastb` extension, CLI, and tooling. FASTB is a unified format — there will be no sister protein format.
 
 ---
 
@@ -98,7 +98,7 @@ Run `fastb <subcommand> --help` for options.
 
 ## Roadmap
 
-- Amino-acid sequence support (ALPHA=AA codec, same format and CLI)
+- Amino-acid sequence support (ALPHA=P codec, same format and CLI)
 - FASTQ equivalent with quality scores
 - Nanopore FAST5 integration
 

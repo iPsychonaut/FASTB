@@ -125,7 +125,7 @@ def _cmd_stats(args) -> int:
             for rec in fastb.read_file(f):
                 seq_up = rec.sequence.upper()
                 length = len(seq_up)
-                basic = "ACGT" if rec.alpha == "DNA" else "ACGU"
+                basic = "ACGT" if rec.alpha == "D" else "ACGU"
                 enc = 2 if all(c in basic for c in seq_up) else 4
                 gc = sum(1 for c in seq_up if c in "GC")
                 n = seq_up.count("N")
@@ -260,13 +260,13 @@ def _cmd_encode(args) -> int:
             return 4
 
         if has_u and not has_t:
-            alpha = "RNA"
+            alpha = "R"
         elif has_t and not has_u:
-            alpha = "DNA"
+            alpha = "D"
         else:
             print(f"fastb encode: record {name!r} contains neither T nor U; "
-                  "defaulting to ALPHA=DNA.", file=sys.stderr)
-            alpha = "DNA"
+                  "defaulting to ALPHA=D.", file=sys.stderr)
+            alpha = "D"
 
         try:
             require_nucleotide(seq_upper, alpha, name,
