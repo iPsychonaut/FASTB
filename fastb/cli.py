@@ -213,6 +213,189 @@ def _cmd_extract(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# encode
+# ---------------------------------------------------------------------------
+
+def _add_encode_parser(subparsers):
+    p = subparsers.add_parser("encode", help="Convert FASTA to FASTB v3.")
+    p.add_argument("file", metavar="file.fasta")
+    p.add_argument("-o", "--output", metavar="PATH",
+                   help="Output path (default: replace .fasta/.fa with .fastb).")
+    p.add_argument("--comment", metavar="TEXT",
+                   help="Optional file-level comment.")
+    p.add_argument("--force-nucleotide", action="store_true",
+                   help="Skip the protein-detection heuristic (rule 3). "
+                        "Does NOT bypass the hard F/I/L/P/Q/E/Z reject.")
+    p.set_defaults(func=_cmd_encode)
+
+
+def _cmd_encode(args) -> int:
+    from fastb.alphabet import require_nucleotide
+
+    out_path = args.output
+    if not out_path:
+        base = args.file
+        for ext in (".fasta", ".fa", ".FASTA", ".FA"):
+            if base.endswith(ext):
+                base = base[:-len(ext)]
+                break
+        out_path = base + ".fastb"
+
+    try:
+        raw_records = list(_parse_fasta(args.file))
+    except OSError as e:
+        print(f"fastb encode: {e}", file=sys.stderr)
+        return 1
+
+    # Validate all records before writing anything (no partial files)
+    fastb_records = []
+    for name, seq in raw_records:
+        seq_upper = seq.upper()
+        has_t = "T" in seq_upper
+        has_u = "U" in seq_upper
+
+        if has_t and has_u:
+            print(f"fastb encode: record {name!r} contains both T and U — "
+                  "cannot determine alphabet.", file=sys.stderr)
+            return 4
+
+        if has_u and not has_t:
+            alpha = "RNA"
+        elif has_t and not has_u:
+            alpha = "DNA"
+        else:
+            print(f"fastb encode: record {name!r} contains neither T nor U; "
+                  "defaulting to ALPHA=DNA.", file=sys.stderr)
+            alpha = "DNA"
+
+        try:
+            require_nucleotide(seq_upper, alpha, name,
+                               force_nucleotide=args.force_nucleotide)
+        except ProteinDetectedError as e:
+            print(f"fastb encode: {e}", file=sys.stderr)
+            return 4
+        except AlphabetError as e:
+            print(f"fastb encode: {e}", file=sys.stderr)
+            return 4
+
+        fastb_records.append(fastb.Record(name, seq, alpha=alpha))
+
+    # All records validated — now write atomically via in-memory buffer
+    import io as _io
+    buf = _io.BytesIO()
+    fastb.write_file(fastb_records, buf, file_comment=args.comment)
+
+    try:
+        with open(out_path, "wb") as f:
+            f.write(buf.getvalue())
+    except OSError as e:
+        print(f"fastb encode: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Encoded {len(fastb_records)} record(s) \u2192 {out_path}", file=sys.stderr)
+    return 0
+
+
+def _parse_fasta(path: str):
+    """Yield (name, sequence) pairs from a FASTA file. Stdlib only."""
+    name = None
+    parts = []
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip("\r\n")
+            if line.startswith(">"):
+                if name is not None:
+                    yield name, "".join(parts)
+                header = line[1:].split()
+                name = header[0] if header else ""
+                parts = []
+            elif line:
+                parts.append(line)
+    if name is not None:
+        yield name, "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# decode
+# ---------------------------------------------------------------------------
+
+def _add_decode_parser(subparsers):
+    p = subparsers.add_parser("decode", help="Convert FASTB v3 to FASTA.")
+    p.add_argument("file", metavar="file.fastb")
+    p.add_argument("-o", "--output", metavar="PATH",
+                   help="Output path (default: replace .fastb with .fasta).")
+    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
+                   help="Wrap sequence to N chars (0=no wrap, default 80).")
+    p.set_defaults(func=_cmd_decode)
+
+
+def _cmd_decode(args) -> int:
+    out_path = args.output
+    if not out_path:
+        base = args.file
+        if base.endswith(".fastb"):
+            base = base[:-6]
+        out_path = base + ".fasta"
+
+    try:
+        with open(args.file, "rb") as fin, open(out_path, "w") as fout:
+            for rec in fastb.read_file(fin):
+                fout.write(f">{rec.name}\n{_wrap(rec.sequence, args.wrap)}\n")
+    except ValueError as e:
+        print(f"fastb decode: {e}", file=sys.stderr)
+        return 3
+    except OSError as e:
+        print(f"fastb decode: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Decoded \u2192 {out_path}", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+def _add_verify_parser(subparsers):
+    p = subparsers.add_parser("verify",
+                              help="Check magic, CRCs, index, and alphabet compliance.")
+    p.add_argument("file", metavar="file.fastb")
+    p.set_defaults(func=_cmd_verify)
+
+
+def _cmd_verify(args) -> int:
+    errors = []
+    record_count = 0
+
+    try:
+        with open(args.file, "rb") as f:
+            for rec in fastb.read_file(f):
+                record_count += 1
+    except ValueError as e:
+        errors.append(str(e))
+
+    if not errors:
+        try:
+            idx = fastb.read_index(args.file)
+            for name in idx:
+                try:
+                    fastb.read_record(args.file, name)
+                except (KeyError, ValueError) as e:
+                    errors.append(f"index inconsistency for {name!r}: {e}")
+        except ValueError as e:
+            errors.append(f"index: {e}")
+
+    if errors:
+        for err in errors:
+            print(f"ERROR: {err}", file=sys.stderr)
+        print(f"FAIL: {len(errors)} error(s) in {args.file}")
+        return 3
+
+    print(f"OK: {record_count} record(s), index consistent \u2014 {args.file}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -230,6 +413,9 @@ def main(argv=None) -> int:
     _add_head_parser(subparsers)
     _add_stats_parser(subparsers)
     _add_extract_parser(subparsers)
+    _add_encode_parser(subparsers)
+    _add_decode_parser(subparsers)
+    _add_verify_parser(subparsers)
 
     args = parser.parse_args(argv)
     try:
