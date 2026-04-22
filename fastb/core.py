@@ -26,6 +26,8 @@ import io
 import zlib
 from typing import List, Tuple, Optional, Iterator, Dict
 
+from fastb.alphabet import require_nucleotide
+
 MAGIC_LINE = b"##FASTB 3.0\n"
 
 # 2-bit: A=00 C=01 G=10 T/U=11
@@ -56,10 +58,6 @@ _UNPACK4_DNA = {
 _UNPACK4_RNA = dict(_UNPACK4_DNA)
 _UNPACK4_RNA[0b0001] = "U"
 
-_LEGAL_DNA = set("ACGTWSMKRYBDHVN-.")
-_LEGAL_RNA = set("ACGUWSMKRYBDHVN-.")
-
-
 class Record:
     """A single nucleotide record in a FASTB v3 file."""
 
@@ -88,71 +86,6 @@ class Record:
 
     def __repr__(self):
         return f"Record(name={self.name!r}, len={len(self.sequence)}, alpha={self.alpha})"
-
-
-# ---------------------------------------------------------------------------
-# Alphabet validation
-# ---------------------------------------------------------------------------
-
-def _validate_alphabet(seq_upper: str, alpha: str, name: str) -> None:
-    """Reject sequences outside the declared alphabet. Catches amino acids."""
-    legal = _LEGAL_DNA if alpha == "DNA" else _LEGAL_RNA
-    for ch in seq_upper:
-        if ch not in legal:
-            raise ValueError(
-                f"Record {name!r}: illegal symbol {ch!r} for ALPHA={alpha}. "
-                f"FASTB v3 is nucleotide-only; protein sequences are not supported. "
-                f"Legal characters: {sorted(legal)}"
-            )
-
-
-def _detect_probable_protein(seq_upper: str, name: str, threshold: float = 0.05) -> None:
-    """Heuristic check for amino-acid sequences that happen to use only letters
-    also valid in IUPAC nucleotide codes (e.g. silk fibroin's GAGAGS motif).
-
-    Real nucleotide sequences are overwhelmingly ACGT/ACGU (+ occasional N);
-    degenerate codes RYSWKMBDHV typically appear at <1% in real biological data.
-    If the sequence is long enough to be meaningful and shows >5% "degenerate"
-    characters, it is almost certainly a protein being misencoded.
-    """
-    if len(seq_upper) < 20:
-        # Too short to apply the heuristic reliably. Common case: adapters,
-        # primers, short test fixtures.
-        return
-
-    # Count letters that are legal in 4-bit mode but are NOT the four canonical
-    # bases or N. High frequency of these is the protein signature.
-    degenerate_letters = set("WSMKRYBDHV")
-    deg_count = sum(1 for ch in seq_upper if ch in degenerate_letters)
-    fraction = deg_count / len(seq_upper)
-
-    if fraction > threshold:
-        raise ValueError(
-            f"Record {name!r}: {fraction:.1%} of residues are IUPAC-degenerate "
-            f"codes (>{threshold:.0%} threshold). This is almost certainly a "
-            f"protein sequence being misinterpreted as nucleotides. If this is "
-            f"genuinely a heavily-degenerate nucleotide sequence, re-encode with "
-            f"the --force-nucleotide flag."
-        )
-
-
-def _detect_mixed_tu(seq_upper: str, alpha: str, name: str) -> None:
-    """Reject records with both T and U — the format encodes only one per record."""
-    if "T" in seq_upper and "U" in seq_upper:
-        raise ValueError(
-            f"Record {name!r}: contains both T and U. FASTB v3 requires a single "
-            f"nucleotide alphabet per record (ALPHA=DNA uses T, ALPHA=RNA uses U)."
-        )
-    if alpha == "DNA" and "U" in seq_upper:
-        raise ValueError(
-            f"Record {name!r}: declared ALPHA=DNA but sequence contains U. "
-            f"Declare ALPHA=RNA or convert U to T before encoding."
-        )
-    if alpha == "RNA" and "T" in seq_upper:
-        raise ValueError(
-            f"Record {name!r}: declared ALPHA=RNA but sequence contains T. "
-            f"Declare ALPHA=DNA or convert T to U before encoding."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +214,7 @@ def write_file(records: List[Record], out, file_comment: Optional[str] = None) -
     for rec in records:
         seq_upper = rec.sequence.upper()
 
-        _validate_alphabet(seq_upper, rec.alpha, rec.name)
-        _detect_mixed_tu(seq_upper, rec.alpha, rec.name)
-        _detect_probable_protein(seq_upper, rec.name)
+        require_nucleotide(seq_upper, rec.alpha, rec.name)
 
         enc = _pick_encoding(seq_upper, rec.alpha)
         payload = _pack2(seq_upper) if enc == 2 else _pack4(seq_upper)
