@@ -6,14 +6,14 @@ name. Clean break from v1 (sentinel bitstream) and v2 (TLV container).
 
 File layout at a glance:
 
-    ##FASTB 3.0                           <- magic line, byte 0
+    ##FASTB 3.0                              <- magic line, byte 0
     # optional file comments
-    >chr1  LEN=12  ENC=2  NUC=D  CRC=...  BYTES=3
+    >chr1  LEN=12  ENC=2  ALPHA=DNA  CRC=...  BYTES=3
     <3 payload bytes>
     \n
     >chr2  ...
     ...
-    chr1  85   12                          <- index entries (plain text)
+    chr1  85   12                            <- index entries (plain text)
     chr2  157  12
     ##INDEX  ENTRIES=2  OFFSETS_START=...
     ##END    FILE_CRC=...
@@ -63,41 +63,44 @@ _LEGAL_RNA = set("ACGUWSMKRYBDHVN-.")
 class Record:
     """A single nucleotide record in a FASTB v3 file."""
 
-    __slots__ = ("name", "sequence", "nuc", "mask", "comment")
+    __slots__ = ("name", "sequence", "alpha", "mask", "comment")
 
     def __init__(
         self,
         name: str,
         sequence: str,
-        nuc: str = "D",
+        alpha: str = "DNA",
         mask: Optional[List[Tuple[int, int]]] = None,
         comment: Optional[str] = None,
     ):
         if "\t" in name or " " in name or "\n" in name or name.startswith(">"):
             raise ValueError("name must not contain whitespace, newline, or '>'")
-        if nuc not in ("D", "R"):
-            raise ValueError("nuc must be 'D' (DNA) or 'R' (RNA)")
+        if alpha not in ("DNA", "RNA"):
+            raise ValueError(
+                f"alpha must be 'DNA' or 'RNA'; got {alpha!r}. "
+                f"('AA' is reserved for a future release.)"
+            )
         self.name = name
         self.sequence = sequence
-        self.nuc = nuc
+        self.alpha = alpha
         self.mask = mask or []
         self.comment = comment
 
     def __repr__(self):
-        return f"Record(name={self.name!r}, len={len(self.sequence)}, nuc={self.nuc})"
+        return f"Record(name={self.name!r}, len={len(self.sequence)}, alpha={self.alpha})"
 
 
 # ---------------------------------------------------------------------------
 # Alphabet validation
 # ---------------------------------------------------------------------------
 
-def _validate_alphabet(seq_upper: str, nuc: str, name: str) -> None:
+def _validate_alphabet(seq_upper: str, alpha: str, name: str) -> None:
     """Reject sequences outside the declared alphabet. Catches amino acids."""
-    legal = _LEGAL_DNA if nuc == "D" else _LEGAL_RNA
+    legal = _LEGAL_DNA if alpha == "DNA" else _LEGAL_RNA
     for ch in seq_upper:
         if ch not in legal:
             raise ValueError(
-                f"Record {name!r}: illegal symbol {ch!r} for NUC={nuc}. "
+                f"Record {name!r}: illegal symbol {ch!r} for ALPHA={alpha}. "
                 f"FASTB v3 is nucleotide-only; protein sequences are not supported. "
                 f"Legal characters: {sorted(legal)}"
             )
@@ -129,26 +132,26 @@ def _detect_probable_protein(seq_upper: str, name: str, threshold: float = 0.05)
             f"codes (>{threshold:.0%} threshold). This is almost certainly a "
             f"protein sequence being misinterpreted as nucleotides. If this is "
             f"genuinely a heavily-degenerate nucleotide sequence, re-encode with "
-            f"FASTB v3 tooling and pass the --allow-degenerate-heavy flag."
+            f"the --force-nucleotide flag."
         )
 
 
-def _detect_mixed_tu(seq_upper: str, nuc: str, name: str) -> None:
+def _detect_mixed_tu(seq_upper: str, alpha: str, name: str) -> None:
     """Reject records with both T and U — the format encodes only one per record."""
     if "T" in seq_upper and "U" in seq_upper:
         raise ValueError(
             f"Record {name!r}: contains both T and U. FASTB v3 requires a single "
-            f"nucleotide alphabet per record (NUC=D uses T, NUC=R uses U)."
+            f"nucleotide alphabet per record (ALPHA=DNA uses T, ALPHA=RNA uses U)."
         )
-    if nuc == "D" and "U" in seq_upper:
+    if alpha == "DNA" and "U" in seq_upper:
         raise ValueError(
-            f"Record {name!r}: declared NUC=D (DNA) but sequence contains U. "
-            f"Declare NUC=R or convert U to T before encoding."
+            f"Record {name!r}: declared ALPHA=DNA but sequence contains U. "
+            f"Declare ALPHA=RNA or convert U to T before encoding."
         )
-    if nuc == "R" and "T" in seq_upper:
+    if alpha == "RNA" and "T" in seq_upper:
         raise ValueError(
-            f"Record {name!r}: declared NUC=R (RNA) but sequence contains T. "
-            f"Declare NUC=D or convert T to U before encoding."
+            f"Record {name!r}: declared ALPHA=RNA but sequence contains T. "
+            f"Declare ALPHA=DNA or convert T to U before encoding."
         )
 
 
@@ -156,9 +159,9 @@ def _detect_mixed_tu(seq_upper: str, nuc: str, name: str) -> None:
 # Bit-packing
 # ---------------------------------------------------------------------------
 
-def _pick_encoding(seq_upper: str, nuc: str) -> int:
+def _pick_encoding(seq_upper: str, alpha: str) -> int:
     """Choose 2 (if sequence is pure ACGT or ACGU) or 4 (any degenerate/gap)."""
-    basic = "ACGT" if nuc == "D" else "ACGU"
+    basic = "ACGT" if alpha == "DNA" else "ACGU"
     return 2 if all(ch in basic for ch in seq_upper) else 4
 
 
@@ -174,8 +177,8 @@ def _pack2(seq_upper: str) -> bytes:
     return bytes(out)
 
 
-def _unpack2(payload: bytes, length: int, nuc: str) -> str:
-    table = _UNPACK2_DNA if nuc == "D" else _UNPACK2_RNA
+def _unpack2(payload: bytes, length: int, alpha: str) -> str:
+    table = _UNPACK2_DNA if alpha == "DNA" else _UNPACK2_RNA
     out = []
     for i in range(length):
         bi = i // 4
@@ -199,8 +202,8 @@ def _pack4(seq_upper: str) -> bytes:
     return bytes(out)
 
 
-def _unpack4(payload: bytes, length: int, nuc: str) -> str:
-    table = _UNPACK4_DNA if nuc == "D" else _UNPACK4_RNA
+def _unpack4(payload: bytes, length: int, alpha: str) -> str:
+    table = _UNPACK4_DNA if alpha == "DNA" else _UNPACK4_RNA
     out = []
     for i in range(length):
         bi = i // 2
@@ -278,11 +281,11 @@ def write_file(records: List[Record], out, file_comment: Optional[str] = None) -
     for rec in records:
         seq_upper = rec.sequence.upper()
 
-        _validate_alphabet(seq_upper, rec.nuc, rec.name)
-        _detect_mixed_tu(seq_upper, rec.nuc, rec.name)
+        _validate_alphabet(seq_upper, rec.alpha, rec.name)
+        _detect_mixed_tu(seq_upper, rec.alpha, rec.name)
         _detect_probable_protein(seq_upper, rec.name)
 
-        enc = _pick_encoding(seq_upper, rec.nuc)
+        enc = _pick_encoding(seq_upper, rec.alpha)
         payload = _pack2(seq_upper) if enc == 2 else _pack4(seq_upper)
 
         runs = rec.mask if rec.mask else _extract_mask_runs(rec.sequence)
@@ -302,7 +305,7 @@ def write_file(records: List[Record], out, file_comment: Optional[str] = None) -
             f">{rec.name}\t"
             f"LEN={len(seq_upper)}\t"
             f"ENC={enc}\t"
-            f"NUC={rec.nuc}\t"
+            f"ALPHA={rec.alpha}\t"
             f"CRC={crc:08x}\t"
             f"BYTES={len(payload)}"
         )
@@ -375,7 +378,17 @@ def read_file(src) -> Iterator[Record]:
         fields = _parse_header_line(line)
         length = int(fields["LEN"])
         enc = int(fields["ENC"])
-        nuc = fields["NUC"]
+        alpha = fields.get("ALPHA")
+        if alpha is None:
+            raise ValueError(
+                f"Record {fields['NAME']!r}: missing ALPHA field in header."
+            )
+        if alpha not in ("DNA", "RNA"):
+            raise ValueError(
+                f"Record {fields['NAME']!r}: ALPHA={alpha} is not supported by "
+                f"this fastb version. Known values: DNA, RNA. "
+                f"(AA is reserved for a future release.)"
+            )
         expected_crc = int(fields["CRC"], 16)
         byte_len = int(fields["BYTES"])
         mask = _decode_mask(fields.get("MASK", ""))
@@ -402,9 +415,9 @@ def read_file(src) -> Iterator[Record]:
             )
 
         if enc == 2:
-            seq = _unpack2(payload, length, nuc)
+            seq = _unpack2(payload, length, alpha)
         elif enc == 4:
-            seq = _unpack4(payload, length, nuc)
+            seq = _unpack4(payload, length, alpha)
         else:
             raise ValueError(f"Unknown ENC={enc} for {fields['NAME']!r}")
 
@@ -414,7 +427,7 @@ def read_file(src) -> Iterator[Record]:
         yield Record(
             name=fields["NAME"],
             sequence=seq,
-            nuc=nuc,
+            alpha=alpha,
             mask=mask,
             comment=pending_comment,
         )
@@ -469,13 +482,11 @@ def read_record(path: str, name: str) -> Record:
     header_offset, _ = idx[name]
     with open(path, "rb") as f:
         f.seek(header_offset)
-        # Re-use the line iterator from here
-        # (We re-read the header through the streaming parser for consistency.)
         line = f.readline()
         fields = _parse_header_line(line)
         length = int(fields["LEN"])
         enc = int(fields["ENC"])
-        nuc = fields["NUC"]
+        alpha = fields["ALPHA"]
         expected_crc = int(fields["CRC"], 16)
         byte_len = int(fields["BYTES"])
         mask = _decode_mask(fields.get("MASK", ""))
@@ -485,13 +496,13 @@ def read_record(path: str, name: str) -> Record:
             raise ValueError(f"CRC mismatch for {name!r}")
 
         if enc == 2:
-            seq = _unpack2(payload, length, nuc)
+            seq = _unpack2(payload, length, alpha)
         else:
-            seq = _unpack4(payload, length, nuc)
+            seq = _unpack4(payload, length, alpha)
         if mask:
             seq = _apply_mask_runs(seq, mask)
 
-        return Record(name=name, sequence=seq, nuc=nuc, mask=mask)
+        return Record(name=name, sequence=seq, alpha=alpha, mask=mask)
 
 
 # ---------------------------------------------------------------------------
@@ -500,9 +511,9 @@ def read_record(path: str, name: str) -> Record:
 
 if __name__ == "__main__":
     recs = [
-        Record("chr1", "ACGTACGTACGT", nuc="D", comment="Simple test record"),
-        Record("chr2", "ACGTacgtNNNN", nuc="D", comment="Has lowercase and N"),
-        Record("mito", "ACGUACGU", nuc="R"),
+        Record("chr1", "ACGTACGTACGT", alpha="DNA", comment="Simple test record"),
+        Record("chr2", "ACGTacgtNNNN", alpha="DNA", comment="Has lowercase and N"),
+        Record("mito", "ACGUACGU", alpha="RNA"),
     ]
 
     buf = io.BytesIO()
@@ -522,13 +533,14 @@ if __name__ == "__main__":
     for orig, got in zip(recs, decoded):
         ok = (
             orig.sequence == got.sequence
-            and orig.nuc == got.nuc
+            and orig.alpha == got.alpha
             and orig.name == got.name
         )
         print(f"  {got.name}: {'OK' if ok else 'FAIL'}  seq={got.sequence!r}")
 
     # Persist to disk and verify random access
-    out_path = "/tmp/demo.fastb"
+    import tempfile, os
+    out_path = os.path.join(tempfile.gettempdir(), "demo.fastb")
     with open(out_path, "wb") as f:
         f.write(data)
     print(f"\nWrote {out_path} ({len(data)} bytes)")

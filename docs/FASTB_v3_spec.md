@@ -1,21 +1,23 @@
-# FASTB v3.0 — Binary Nucleotide Format
+# FASTB v3.0 — Binary Sequence Format
 
+**Document version:** v3.0 draft (ALPHA field, 2026-04-21)
 **Status:** Draft specification.
-**Goal:** A nucleotide sequence container with compact bit-packed payload, a fully human-readable structural layer, explicit self-description, and O(1) random access. Replaces FASTA for storage and FASTB v1/v2 for this project going forward.
+**Goal:** A sequence container with compact bit-packed payload, a fully human-readable structural layer, explicit self-description, and O(1) random access. Nucleotide content (DNA and RNA) is supported in this release. Amino-acid support is planned; the `ALPHA=AA` value is reserved in the file format.
 
 ## 1. Design principles
 
 1. **Density on payload, readability on structure.** The sequence itself is bit-packed (2 or 4 bits per base). Everything *about* the sequence — magic string, per-record metadata, index — is plain UTF-8 text.
-2. **Self-describing, never heuristic.** Every record header carries its length, encoding, nucleotide type, byte count, and CRC32 as explicit fields. A decoder never guesses.
+2. **Self-describing, never heuristic.** Every record header carries its length, encoding, alphabet type, byte count, and CRC32 as explicit fields. A decoder never guesses.
 3. **Graceful degradation in text tools.** `head`, `tail`, `file`, `grep '^>'`, and `less` all do something useful on a FASTB v3 file even without a dedicated parser.
 4. **Recoverable.** If the trailing index is truncated or damaged, records can still be read sequentially from the top.
 5. **No backwards compatibility with v1/v2.** Clean break to avoid the heuristics that made v2 fragile (see appendix). v3 readers MAY ship alongside v1/v2 readers in the same toolkit for migration.
+6. **Unified format.** The same magic line, file extension, CLI, and tooling handle all content types. FASTB will not split into sister formats (`.fastbn` for nucleotides, `.fastbp` for proteins, etc.); content type is identified per-record by the `ALPHA=` field.
 
 ## 2. File identification
 
 - **Extension:** `.fastb`
 - **MIME type:** `application/vnd.fastb` (proposed)
-- **Magic line:** first 14 bytes are exactly `##FASTB 3.0\n` (note the space, not a dash — this is the v3 signature).
+- **Magic line:** first 12 bytes are exactly `##FASTB 3.0\n` (note the space, not a dash — this is the v3 signature).
 
 Earlier versions of FASTB did not have a magic line at byte 0, which is why version sniffing relied on internal heuristics. v3 fixes this: byte-0 magic plus version means `file(1)` and libmagic can identify it unambiguously.
 
@@ -45,13 +47,21 @@ Earlier versions of FASTB did not have a magic line at byte 0, which is why vers
 ### 4.1 Record header line
 
 ```
->NAME\tLEN=<n>\tENC=<2|4>\tNUC=<D|R>\tCRC=<hex8>\tBYTES=<n>[\tMASK=<runs>][\tK=V ...]\n
+>NAME\tLEN=<n>\tENC=<2|4>\tALPHA=<DNA|RNA>\tCRC=<hex8>\tBYTES=<n>[\tMASK=<runs>][\tK=V ...]\n
 ```
 
 - `NAME`: sequence identifier. MUST NOT contain `\t`, ` `, `\n`, or `>`. Unicode permitted otherwise.
 - `LEN`: number of bases in the sequence (decimal).
 - `ENC`: encoding used — `2` for pure ACGT/ACGU, `4` for any degenerate or gap.
-- `NUC`: `D` for DNA (decode 2-bit `11` as T), `R` for RNA (decode as U). No mixed T/U within a single record — the format enforces a single alphabet per record.
+- `ALPHA`: indicates the alphabet of the record's sequence. Defined values:
+  - `DNA` — nucleotide sequence in the DNA alphabet (A, C, G, T, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `T`.
+  - `RNA` — nucleotide sequence in the RNA alphabet (A, C, G, U, plus IUPAC degenerate codes and gap). Decoder maps 2-bit `11` to `U`.
+  - `AA` — amino-acid sequence (RESERVED for a future release; decoders in this release MUST reject records with `ALPHA=AA`, producing a clear error message).
+
+  No mixed T/U within a single record — the format enforces a single alphabet per record.
+
+  Future values MAY be added; decoders MUST reject unknown values rather than guessing. A file containing mixed `ALPHA` values across records is permitted — each record is independently validated and decoded.
+
 - `CRC`: CRC32 (zlib/IEEE polynomial) of the payload bytes, 8 lowercase hex digits.
 - `BYTES`: exact byte count of the payload (redundant with LEN+ENC but simplifies stream parsing and catches truncation).
 - `MASK` (optional): run-length-encoded lowercase intervals as `<start>:<length>` pairs, hex, comma-separated. Applied post-decode. Omitted when the sequence has no masking.
@@ -149,8 +159,15 @@ Honest headline: **FASTB v3 trades a small size win for a large speed-and-struct
 
 - **Quality scores.** A sister format (FASTBQ, planned) will handle FASTQ replacement. Not bolted onto v3.
 - **Per-position annotations** (features beyond case-masking, tracks). Use companion BED/GFF.
-- **Amino acids.** FASTB v3 is nucleotide-only. Protein sequences MUST be rejected with a clear error, not silently encoded as 4-bit garbage (which is a real bug in v2 — see appendix).
 - **Encryption, signing, compression.** Layer these externally if needed.
+
+### 9.1 Amino-acid sequences (planned, not yet implemented)
+
+FASTB is a unified format for biological sequences. Amino-acid support is planned for a future release under the same `.fastb` extension, magic line, CLI, and tooling.
+
+In this release, the `ALPHA=AA` header value is **reserved**. Decoders MUST reject any record with `ALPHA=AA` with a clear error message. Encoders MUST NOT write `ALPHA=AA` records until the AA codec is published.
+
+The alphabet dispatch layer (`fastb/alphabet.py`) is already structured to accept a future `require_protein` path alongside `require_nucleotide`. Adding AA support will be additive — it will not require changing the file format, the magic line, or the CLI's public interface.
 
 ## Appendix: Bugs found in FASTB v2 that v3 fixes
 
@@ -160,16 +177,16 @@ Round-trip tests on the v2 codec revealed three correctness issues and two desig
 ```python
 nuc_tag = "R" if str(nuc).upper().startswith("R") or ("U" in (seq or "")) else "D"
 ```
-This makes `NUC` a derived value, not a declared one. Consequences:
+This makes the alphabet field a derived value, not a declared one. Consequences:
 - A record declared `DNA` containing a `U` silently becomes RNA.
 - A record with mixed `T` and `U` becomes RNA, and all `T`s are rewritten to `U` on decode. Lossy for legitimate sequences.
 - A record declared `RNA` but containing only `T` characters round-trips with every `T` flipped to `U`.
 
-v3 fix: `NUC` is authoritative on encode; mixed T/U within a record is rejected with a clear error.
+v3 fix: `ALPHA` is authoritative on encode; mixed T/U within a record is rejected with a clear error.
 
 **2. Protein sequences are silently accepted if they happen to use only letters that overlap the IUPAC nucleotide alphabet.** The set `A C G H K M N R S T V W Y D B` is legal in v2's 4-bit mode — but those are also valid amino acid one-letter codes. A peptide like `GAGAGSGAGAGS` (a real silk fibroin motif) encodes cleanly as "nucleotides" and decodes back unchanged. The README's claim that "unsupported amino acid FASTA files" are rejected is only true for proteins containing `F`, `I`, `L`, `P`, `Q`, `E`, or `Z`.
 
-v3 fix: explicit alphabet declaration in `NUC=D|R`, plus a content heuristic in the reference encoder that rejects sequences ≥20 bases long with >5% IUPAC-degenerate characters (`W S M K R Y B D H V`). Real nucleotide sequences are overwhelmingly `ACGT[U]` with occasional `N`; >5% degenerate is a near-certain protein signal. The silk-fibroin `GAGAGS` motif, BSA signal peptides, and W-rich peptides all correctly reject under this rule. Short sequences (<20 bases) bypass the heuristic to avoid false positives on primers and adapters.
+v3 fix: explicit alphabet declaration in `ALPHA=DNA|RNA`, plus a content heuristic in the reference encoder that rejects sequences ≥20 bases long with >5% IUPAC-degenerate characters (`W S M K R Y B D H V`). Real nucleotide sequences are overwhelmingly `ACGT[U]` with occasional `N`; >5% degenerate is a near-certain protein signal. The silk-fibroin `GAGAGS` motif, BSA signal peptides, and W-rich peptides all correctly reject under this rule. Short sequences (<20 bases) bypass the heuristic to avoid false positives on primers and adapters.
 
 **3. CRC-as-end-of-record heuristic is fragile.** The v2 decoder has no END_RECORD marker in the emitted output (the `_END_RECORD = 0xFE` constant is defined but never written). Instead it reads 4 bytes after each TLV and checks if they form a valid CRC; if not, seeks back and reads another TLV. This doubles I/O, creates subtle coupling for future TLV types, and produces confusing error messages when tampering occurs mid-record (e.g. `UnicodeDecodeError` instead of `CRC mismatch`).
 
@@ -187,4 +204,4 @@ v3 fix: `MASK` field uses variable-width hex, no ceiling.
 
 ---
 
-*Document version: v3.0 draft*
+*Document version: v3.0 draft (ALPHA field, 2026-04-21)*
