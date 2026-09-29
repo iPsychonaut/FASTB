@@ -1,73 +1,75 @@
-"""FASTB v3 command-line interface.
+"""FASTB command-line interface.
 
-Single entry point `fastb` with subcommand dispatch.
-Exit codes: 0=success, 1=generic error, 2=partial success,
-            3=file format error, 4=alphabet error.
+Exit codes: 0 success, 1 generic error, 2 partial success (some records
+missing), 3 file format error, 4 alphabet error.
 """
 
 from __future__ import annotations
 import argparse
+import os
 import sys
 
 import fastb
-from fastb.alphabet import AlphabetError, ProteinDetectedError
+from fastb.alphabet import AlphabetError
+from fastb.io import iter_fasta, iter_records, write_records, wrap_bytes
 
 
-def _wrap(seq: str, width: int) -> str:
-    if width <= 0:
-        return seq
-    return "\n".join(seq[i:i + width] for i in range(0, len(seq), width))
+def _out():
+    return sys.stdout.buffer
 
 
-def _emit_fasta(name: str, seq: str, wrap: int) -> None:
-    sys.stdout.write(f">{name}\n{_wrap(seq, wrap)}\n")
+def _emit(out, name: str, seq: str, wrap: int) -> None:
+    out.write(b">" + name.encode("utf-8") + b"\n" + wrap_bytes(seq, wrap))
+
+
+def _wrap_arg(p):
+    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
+                   help="Wrap sequence to N chars (0=no wrap, default 80).")
+
+
+def _strip_ext(path: str, exts) -> str:
+    low = path.lower()
+    for ext in exts:
+        if low.endswith(ext):
+            return path[:-len(ext)]
+    return path
 
 
 # ---------------------------------------------------------------------------
-# view
+# cat / view
 # ---------------------------------------------------------------------------
 
-def _add_view_parser(subparsers):
-    p = subparsers.add_parser("view", help="Decode records as FASTA to stdout.")
+def _add_cat_parser(sub, name, help_text):
+    p = sub.add_parser(name, help=help_text)
     p.add_argument("file", metavar="file.fastb")
     p.add_argument("-n", "--names", metavar="NAME[,NAME...]",
                    help="Only emit these records (comma-separated).")
-    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
-                   help="Wrap sequence to N chars (0=no wrap, default 80).")
-    p.add_argument("--no-index", action="store_true",
-                   help="Stream from the top; ignore footer index.")
-    p.set_defaults(func=_cmd_view)
+    _wrap_arg(p)
+    p.set_defaults(func=_cmd_cat, cmd=name)
 
 
-def _cmd_view(args) -> int:
+def _cmd_cat(args) -> int:
+    out = _out()
     names = set(args.names.split(",")) if args.names else None
-    wrap = args.wrap
-
-    if names and not args.no_index:
+    if names:
         try:
             idx = fastb.read_index(args.file)
-        except Exception:
-            idx = None
-        if idx is not None:
-            missing = names - set(idx)
-            for name in sorted(missing):
-                print(f"fastb view: record {name!r} not found", file=sys.stderr)
-            for name in names - missing:
-                try:
-                    rec = fastb.read_record(args.file, name)
-                    _emit_fasta(rec.name, rec.sequence, wrap)
-                except (KeyError, ValueError) as e:
-                    print(f"fastb view: {e}", file=sys.stderr)
-                    return 3
-            return 2 if missing else 0
-
+        except ValueError as e:
+            print(f"fastb {args.cmd}: {e}", file=sys.stderr)
+            return 3
+        missing = names - set(idx)
+        for name in sorted(missing):
+            print(f"fastb {args.cmd}: record {name!r} not found", file=sys.stderr)
+        for name in idx:
+            if name in names:
+                rec = fastb.read_record(args.file, name)
+                _emit(out, rec.name, rec.sequence, args.wrap)
+        return 2 if missing else 0
     try:
-        with open(args.file, "rb") as f:
-            for rec in fastb.read_file(f):
-                if names is None or rec.name in names:
-                    _emit_fasta(rec.name, rec.sequence, wrap)
+        for name, seq in iter_records(args.file):
+            _emit(out, name, seq, args.wrap)
     except ValueError as e:
-        print(f"fastb view: {e}", file=sys.stderr)
+        print(f"fastb {args.cmd}: {e}", file=sys.stderr)
         return 3
     return 0
 
@@ -76,31 +78,21 @@ def _cmd_view(args) -> int:
 # head
 # ---------------------------------------------------------------------------
 
-def _add_head_parser(subparsers):
-    p = subparsers.add_parser("head", help="Print the first N records as FASTA.")
+def _add_head_parser(sub):
+    p = sub.add_parser("head", help="Print the first N records as FASTA.")
     p.add_argument("file", metavar="file.fastb")
-    p.add_argument("-n", type=int, default=5, metavar="N",
-                   help="Number of records (default 5).")
-    p.add_argument("--bases", type=int, default=0, metavar="N",
-                   help="Stop once ~N bases have been emitted.")
-    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
-                   help="Wrap sequence to N chars (0=no wrap, default 80).")
+    p.add_argument("-n", type=int, default=5, metavar="N", help="Number of records (default 5).")
+    _wrap_arg(p)
     p.set_defaults(func=_cmd_head)
 
 
 def _cmd_head(args) -> int:
-    count = 0
-    bases_emitted = 0
+    out = _out()
     try:
-        with open(args.file, "rb") as f:
-            for rec in fastb.read_file(f):
-                if count >= args.n:
-                    break
-                if args.bases and bases_emitted >= args.bases:
-                    break
-                _emit_fasta(rec.name, rec.sequence, args.wrap)
-                count += 1
-                bases_emitted += len(rec.sequence)
+        for i, (name, seq) in enumerate(iter_records(args.file)):
+            if i >= args.n:
+                break
+            _emit(out, name, seq, args.wrap)
     except ValueError as e:
         print(f"fastb head: {e}", file=sys.stderr)
         return 3
@@ -111,43 +103,33 @@ def _cmd_head(args) -> int:
 # stats
 # ---------------------------------------------------------------------------
 
-def _add_stats_parser(subparsers):
-    p = subparsers.add_parser("stats", help="Per-record statistics.")
+def _add_stats_parser(sub):
+    p = sub.add_parser("stats", help="Per-record statistics.")
     p.add_argument("file", metavar="file.fastb")
     p.set_defaults(func=_cmd_stats)
 
 
 def _cmd_stats(args) -> int:
+    import numpy as np
     print("name\tlength\talpha\tenc\tgc_pct\tn_pct\tmasked_pct")
-    total_len = total_gc = total_n = total_masked = count = 0
+    tot = np.zeros(4, dtype=np.int64)  # length, gc, n, masked
     try:
         with open(args.file, "rb") as f:
             for rec in fastb.read_file(f):
-                seq_up = rec.sequence.upper()
-                length = len(seq_up)
-                basic = "ACGT" if rec.alpha == "D" else "ACGU"
-                enc = 2 if all(c in basic for c in seq_up) else 4
-                gc = sum(1 for c in seq_up if c in "GC")
-                n = seq_up.count("N")
-                masked = sum(1 for c in rec.sequence if c.islower())
-                def pct(x):
-                    return f"{100 * x / length:.2f}" if length else "0.00"
-                print(f"{rec.name}\t{length}\t{rec.alpha}\t{enc}\t"
-                      f"{pct(gc)}\t{pct(n)}\t{pct(masked)}")
-                total_len += length
-                total_gc += gc
-                total_n += n
-                total_masked += masked
-                count += 1
+                enc, *_ = fastb.encode_sequence(rec.sequence, rec.alpha)
+                counts = fastb.alphabet._letter_counts(rec.sequence)
+                raw = np.frombuffer(rec.sequence.encode("ascii"), dtype=np.uint8)
+                row = np.array([len(raw), counts[ord("G")] + counts[ord("C")],
+                                counts[ord("N")], int(((raw >= 97) & (raw <= 122)).sum())])
+                tot += row
+                pct = [f"{100 * x / row[0]:.2f}" if row[0] else "0.00" for x in row[1:]]
+                print(f"{rec.name}\t{row[0]}\t{rec.alpha}\t{enc}\t" + "\t".join(pct))
     except ValueError as e:
         print(f"fastb stats: {e}", file=sys.stderr)
         return 3
-
-    if count:
-        def tot_pct(x):
-            return f"{100 * x / total_len:.2f}" if total_len else "0.00"
-        print(f"TOTAL\t{total_len}\t-\t-\t"
-              f"{tot_pct(total_gc)}\t{tot_pct(total_n)}\t{tot_pct(total_masked)}")
+    if tot[0]:
+        pct = [f"{100 * x / tot[0]:.2f}" for x in tot[1:]]
+        print(f"TOTAL\t{tot[0]}\t-\t-\t" + "\t".join(pct))
     return 0
 
 
@@ -155,33 +137,31 @@ def _cmd_stats(args) -> int:
 # extract
 # ---------------------------------------------------------------------------
 
-def _add_extract_parser(subparsers):
-    p = subparsers.add_parser("extract", help="Random-access extraction to FASTA.")
+def _add_extract_parser(sub):
+    p = sub.add_parser("extract", help="Random-access extraction to FASTA.")
     p.add_argument("file", metavar="file.fastb")
     p.add_argument("names", nargs="+", metavar="NAME")
-    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
-                   help="Wrap sequence to N chars (0=no wrap, default 80).")
+    _wrap_arg(p)
     p.add_argument("--region", metavar="NAME:START-END",
                    help="1-based inclusive subrange of one record.")
     p.set_defaults(func=_cmd_extract)
 
 
 def _cmd_extract(args) -> int:
+    out = _out()
     try:
         idx = fastb.read_index(args.file)
     except ValueError as e:
         print(f"fastb extract: {e}", file=sys.stderr)
         return 3
 
-    region_name = region_start = region_end = None
+    region = None
     if args.region:
         try:
             rname, rrange = args.region.rsplit(":", 1)
             rstart, rend = rrange.split("-")
-            region_name = rname
-            region_start = int(rstart) - 1  # 0-based
-            region_end = int(rend)           # end is inclusive, slice [start:end]
-        except (ValueError, AttributeError):
+            region = (rname, int(rstart) - 1, int(rend))
+        except ValueError:
             print("fastb extract: invalid --region format, expected NAME:START-END",
                   file=sys.stderr)
             return 1
@@ -190,193 +170,151 @@ def _cmd_extract(args) -> int:
     for name in missing:
         print(f"fastb extract: record {name!r} not found", file=sys.stderr)
 
-    exit_code = 2 if missing else 0
     for name in args.names:
         if name in missing:
             continue
-        try:
-            rec = fastb.read_record(args.file, name)
-        except (KeyError, ValueError) as e:
-            print(f"fastb extract: {e}", file=sys.stderr)
-            exit_code = 2
-            continue
-
-        seq = rec.sequence
-        display_name = rec.name
-        if region_name == name and region_start is not None:
-            seq = seq[region_start:region_end]
-            display_name = f"{rec.name}:{region_start + 1}-{region_end}"
-
-        _emit_fasta(display_name, seq, args.wrap)
-
-    return exit_code
+        rec = fastb.read_record(args.file, name)
+        seq, display = rec.sequence, rec.name
+        if region and region[0] == name:
+            seq = seq[region[1]:region[2]]
+            display = f"{rec.name}:{region[1] + 1}-{region[2]}"
+        _emit(out, display, seq, args.wrap)
+    return 2 if missing else 0
 
 
 # ---------------------------------------------------------------------------
-# encode
+# encode / decode
 # ---------------------------------------------------------------------------
 
-def _add_encode_parser(subparsers):
-    p = subparsers.add_parser("encode", help="Convert FASTA to FASTB v3.")
+def _add_encode_parser(sub):
+    p = sub.add_parser("encode", help="Convert FASTA (.fasta, .fa, .fna, or .gz) to FASTB.")
     p.add_argument("file", metavar="file.fasta")
     p.add_argument("-o", "--output", metavar="PATH",
-                   help="Output path (default: replace .fasta/.fa with .fastb).")
-    p.add_argument("--comment", metavar="TEXT",
-                   help="Optional file-level comment.")
+                   help="Output path (default: input with the extension replaced by .fastb).")
+    p.add_argument("--comment", metavar="TEXT", help="Optional file-level comment.")
     p.add_argument("--force-nucleotide", action="store_true",
-                   help="Skip the protein-detection heuristic (rule 3). "
-                        "Does NOT bypass the hard F/I/L/P/Q/E/Z reject.")
+                   help="Skip the protein heuristic. Never bypasses the hard F/I/L/P/Q/E/Z reject.")
     p.set_defaults(func=_cmd_encode)
 
 
 def _cmd_encode(args) -> int:
-    from fastb.alphabet import require_nucleotide
-
-    out_path = args.output
-    if not out_path:
-        base = args.file
-        for ext in (".fasta", ".fa", ".FASTA", ".FA"):
-            if base.endswith(ext):
-                base = base[:-len(ext)]
-                break
-        out_path = base + ".fastb"
-
+    out_path = args.output or _strip_ext(
+        _strip_ext(args.file, (".gz",)), (".fasta", ".fa", ".fna")) + ".fastb"
     try:
-        raw_records = list(_parse_fasta(args.file))
-    except OSError as e:
+        n = write_records(out_path, iter_fasta(args.file), file_comment=args.comment,
+                          force_nucleotide=args.force_nucleotide)
+    except AlphabetError as e:
+        print(f"fastb encode: {e}", file=sys.stderr)
+        return 4
+    except (OSError, ValueError, UnicodeDecodeError) as e:
         print(f"fastb encode: {e}", file=sys.stderr)
         return 1
-
-    # Validate all records before writing anything (no partial files)
-    fastb_records = []
-    for name, seq in raw_records:
-        seq_upper = seq.upper()
-        has_t = "T" in seq_upper
-        has_u = "U" in seq_upper
-
-        if has_t and has_u:
-            print(f"fastb encode: record {name!r} contains both T and U; "
-                  "cannot determine alphabet.", file=sys.stderr)
-            return 4
-
-        if has_u and not has_t:
-            alpha = "R"
-        elif has_t and not has_u:
-            alpha = "D"
-        else:
-            print(f"fastb encode: record {name!r} contains neither T nor U; "
-                  "defaulting to ALPHA=D.", file=sys.stderr)
-            alpha = "D"
-
-        try:
-            require_nucleotide(seq_upper, alpha, name,
-                               force_nucleotide=args.force_nucleotide)
-        except ProteinDetectedError as e:
-            print(f"fastb encode: {e}", file=sys.stderr)
-            return 4
-        except AlphabetError as e:
-            print(f"fastb encode: {e}", file=sys.stderr)
-            return 4
-
-        fastb_records.append(fastb.Record(name, seq, alpha=alpha))
-
-    # All records validated. Now write atomically via in-memory buffer
-    import io as _io
-    buf = _io.BytesIO()
-    fastb.write_file(fastb_records, buf, file_comment=args.comment)
-
-    try:
-        with open(out_path, "wb") as f:
-            f.write(buf.getvalue())
-    except OSError as e:
-        print(f"fastb encode: {e}", file=sys.stderr)
-        return 1
-
-    print(f"Encoded {len(fastb_records)} record(s) \u2192 {out_path}", file=sys.stderr)
+    print(f"Encoded {n} record(s) -> {out_path}", file=sys.stderr)
     return 0
 
 
-def _parse_fasta(path: str):
-    """Yield (name, sequence) pairs from a FASTA file. Stdlib only."""
-    name = None
-    parts = []
-    with open(path) as f:
-        for line in f:
-            line = line.rstrip("\r\n")
-            if line.startswith(">"):
-                if name is not None:
-                    yield name, "".join(parts)
-                header = line[1:].split()
-                name = header[0] if header else ""
-                parts = []
-            elif line:
-                parts.append(line)
-    if name is not None:
-        yield name, "".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# decode
-# ---------------------------------------------------------------------------
-
-def _add_decode_parser(subparsers):
-    p = subparsers.add_parser("decode", help="Convert FASTB v3 to FASTA.")
+def _add_decode_parser(sub):
+    p = sub.add_parser("decode", help="Convert FASTB to FASTA.")
     p.add_argument("file", metavar="file.fastb")
     p.add_argument("-o", "--output", metavar="PATH",
                    help="Output path (default: replace .fastb with .fasta).")
-    p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
-                   help="Wrap sequence to N chars (0=no wrap, default 80).")
+    _wrap_arg(p)
     p.set_defaults(func=_cmd_decode)
 
 
 def _cmd_decode(args) -> int:
-    out_path = args.output
-    if not out_path:
-        base = args.file
-        if base.endswith(".fastb"):
-            base = base[:-6]
-        out_path = base + ".fasta"
-
+    out_path = args.output or _strip_ext(args.file, (".fastb",)) + ".fasta"
     try:
-        with open(args.file, "rb") as fin, open(out_path, "w") as fout:
-            for rec in fastb.read_file(fin):
-                fout.write(f">{rec.name}\n{_wrap(rec.sequence, args.wrap)}\n")
+        with open(out_path, "wb") as fout:
+            for name, seq in iter_records(args.file):
+                _emit(fout, name, seq, args.wrap)
     except ValueError as e:
         print(f"fastb decode: {e}", file=sys.stderr)
         return 3
     except OSError as e:
         print(f"fastb decode: {e}", file=sys.stderr)
         return 1
-
-    print(f"Decoded \u2192 {out_path}", file=sys.stderr)
+    print(f"Decoded -> {out_path}", file=sys.stderr)
     return 0
 
 
 # ---------------------------------------------------------------------------
-# verify
+# index / info / verify
 # ---------------------------------------------------------------------------
 
-def _add_verify_parser(subparsers):
-    p = subparsers.add_parser("verify",
-                              help="Check magic, CRCs, index, and alphabet compliance.")
+def _add_index_parser(sub):
+    p = sub.add_parser("index", help="Print the record index: number, name, offset, length.")
+    p.add_argument("file", metavar="file.fastb")
+    p.set_defaults(func=_cmd_index)
+
+
+def _cmd_index(args) -> int:
+    try:
+        idx = fastb.read_index(args.file)
+    except ValueError as e:
+        print(f"fastb index: {e}", file=sys.stderr)
+        return 3
+    print("record\tname\toffset\tlength")
+    for k, (name, (off, length)) in enumerate(idx.items()):
+        print(f"{k}\t{name}\t{off}\t{length}")
+    return 0
+
+
+def _add_info_parser(sub):
+    p = sub.add_parser("info", help="File summary: records, bytes, bits per base, tier counts.")
+    p.add_argument("file", metavar="file.fastb")
+    p.set_defaults(func=_cmd_info)
+
+
+def _cmd_info(args) -> int:
+    records = bases = enc2 = enc4 = nruns = mask = 0
+    try:
+        with open(args.file, "rb") as f:
+            for fields, _, _ in fastb.iter_raw(f, read_payload=False):
+                records += 1
+                bases += int(fields["LEN"])
+                if fields["ENC"] == "2":
+                    enc2 += 1
+                else:
+                    enc4 += 1
+                nruns += fields.get("NRUNS", "").count(":")
+                mask += fields.get("MASK", "").count(":")
+    except ValueError as e:
+        print(f"fastb info: {e}", file=sys.stderr)
+        return 3
+    size = os.path.getsize(args.file)
+    print(f"file\t{args.file}")
+    print(f"records\t{records}")
+    print(f"bases\t{bases}")
+    print(f"bytes\t{size}")
+    print(f"bits_per_base\t{8 * size / bases:.3f}" if bases else "bits_per_base\tn/a")
+    print(f"records_2bit\t{enc2}")
+    print(f"records_4bit\t{enc4}")
+    print(f"n_runs\t{nruns}")
+    print(f"mask_runs\t{mask}")
+    return 0
+
+
+def _add_verify_parser(sub):
+    p = sub.add_parser("verify", help="Check magic, CRCs, index, and alphabet compliance.")
     p.add_argument("file", metavar="file.fastb")
     p.set_defaults(func=_cmd_verify)
 
 
 def _cmd_verify(args) -> int:
     errors = []
-    record_count = 0
-
+    count = 0
     try:
         with open(args.file, "rb") as f:
-            for rec in fastb.read_file(f):
-                record_count += 1
+            for _ in fastb.read_file(f):
+                count += 1
     except ValueError as e:
         errors.append(str(e))
-
     if not errors:
         try:
             idx = fastb.read_index(args.file)
+            if len(idx) != count:
+                errors.append(f"index lists {len(idx)} records, file has {count}")
             for name in idx:
                 try:
                     fastb.read_record(args.file, name)
@@ -384,14 +322,12 @@ def _cmd_verify(args) -> int:
                     errors.append(f"index inconsistency for {name!r}: {e}")
         except ValueError as e:
             errors.append(f"index: {e}")
-
     if errors:
         for err in errors:
             print(f"ERROR: {err}", file=sys.stderr)
         print(f"FAIL: {len(errors)} error(s) in {args.file}")
         return 3
-
-    print(f"OK: {record_count} record(s), index consistent \u2014 {args.file}")
+    print(f"OK: {count} record(s), index consistent: {args.file}")
     return 0
 
 
@@ -400,27 +336,25 @@ def _cmd_verify(args) -> int:
 # ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="fastb",
-        description="FASTB v3: binary sequence format.",
-    )
-    parser.add_argument(
-        "--version", action="version", version="fastb 3.0.0"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    _add_view_parser(subparsers)
-    _add_head_parser(subparsers)
-    _add_stats_parser(subparsers)
-    _add_extract_parser(subparsers)
-    _add_encode_parser(subparsers)
-    _add_decode_parser(subparsers)
-    _add_verify_parser(subparsers)
-
+    parser = argparse.ArgumentParser(prog="fastb", description="FASTB: binary sequence format.")
+    parser.add_argument("--version", action="version", version=f"fastb {fastb.__version__}")
+    sub = parser.add_subparsers(dest="command", required=True)
+    _add_encode_parser(sub)
+    _add_decode_parser(sub)
+    _add_cat_parser(sub, "cat", "Write records as FASTA to stdout (for pipes).")
+    _add_cat_parser(sub, "view", "Alias of cat.")
+    _add_head_parser(sub)
+    _add_extract_parser(sub)
+    _add_index_parser(sub)
+    _add_info_parser(sub)
+    _add_stats_parser(sub)
+    _add_verify_parser(sub)
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except Exception as e:
+    except BrokenPipeError:
+        return 0
+    except Exception:
         import traceback
         traceback.print_exc()
         return 1

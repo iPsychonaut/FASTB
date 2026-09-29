@@ -123,7 +123,10 @@ def detect_alphabet(seq_upper: str) -> str:
 def _letter_counts(seq: str) -> "np.ndarray":
     """Count of each byte value, case-folded to uppercase. Shape (256,)."""
     raw = np.frombuffer(seq.encode("ascii", errors="replace"), dtype=np.uint8)
-    counts = np.bincount(raw, minlength=256)
+    # bincount upcasts its input to int64; chunking keeps that temp at 8 MB.
+    counts = np.zeros(256, dtype=np.int64)
+    for i in range(0, len(raw), 1 << 20):
+        counts += np.bincount(raw[i:i + (1 << 20)], minlength=256)
     counts[ord("A"):ord("Z") + 1] += counts[ord("a"):ord("z") + 1]
     counts[ord("a"):ord("z") + 1] = 0
     return counts

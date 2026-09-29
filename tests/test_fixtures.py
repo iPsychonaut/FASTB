@@ -7,7 +7,7 @@ import os
 import pytest
 
 import fastb
-from fastb.cli import _parse_fasta
+from fastb.io import iter_fasta
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 NAMES = sorted(os.path.basename(p)[:-6] for p in glob.glob(os.path.join(FIXTURES, "*.fasta")))
@@ -15,7 +15,7 @@ NAMES = sorted(os.path.basename(p)[:-6] for p in glob.glob(os.path.join(FIXTURES
 
 def _records(name):
     recs = []
-    for rec_name, seq in _parse_fasta(os.path.join(FIXTURES, name + ".fasta")):
+    for rec_name, seq in iter_fasta(os.path.join(FIXTURES, name + ".fasta")):
         alpha = "R" if "U" in seq.upper() else "D"
         recs.append(fastb.Record(rec_name, seq, alpha=alpha))
     return recs

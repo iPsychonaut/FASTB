@@ -103,9 +103,15 @@ def _runs(flags: np.ndarray) -> List[Tuple[int, int]]:
     """(start, length) of each contiguous True run in a bool array."""
     if not flags.any():
         return []
-    d = np.diff(np.concatenate(([0], flags.view(np.int8), [0])))
-    starts = np.flatnonzero(d == 1)
-    ends = np.flatnonzero(d == -1)
+    # Positions where the flag changes value. Kept as bool ops: an int8
+    # diff with Python-int endpoints upcasts to int64 (8x the memory).
+    change = np.flatnonzero(flags[1:] != flags[:-1]) + 1
+    starts = change[flags[change]]
+    ends = change[~flags[change]]
+    if flags[0]:
+        starts = np.concatenate(([0], starts))
+    if flags[-1]:
+        ends = np.concatenate((ends, [len(flags)]))
     return list(zip(starts.tolist(), (ends - starts).tolist()))
 
 
@@ -174,7 +180,8 @@ def decode_sequence(payload: bytes, length: int, enc: int, alpha: str,
 # Write
 # ---------------------------------------------------------------------------
 
-def write_file(records: Iterable[Record], out, file_comment: Optional[str] = None) -> None:
+def write_file(records: Iterable[Record], out, file_comment: Optional[str] = None,
+               force_nucleotide: bool = False) -> None:
     """Write records to `out` (binary file-like with .write() and .tell()).
 
     Records are written as they arrive; only the index (a few bytes per
@@ -188,7 +195,7 @@ def write_file(records: Iterable[Record], out, file_comment: Optional[str] = Non
     index_entries: List[Tuple[str, int, int]] = []
 
     for rec in records:
-        require_nucleotide(rec.sequence, rec.alpha, rec.name)
+        require_nucleotide(rec.sequence, rec.alpha, rec.name, force_nucleotide)
         enc, payload, nruns, mask = encode_sequence(rec.sequence, rec.alpha)
         crc = zlib.crc32(payload) & 0xFFFFFFFF
 
