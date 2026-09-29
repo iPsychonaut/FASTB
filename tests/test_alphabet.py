@@ -32,7 +32,7 @@ def test_detect_alphabet(seq, expected):
 
 
 # ---------------------------------------------------------------------------
-# require_nucleotide — happy path
+# require_nucleotide: happy path
 # ---------------------------------------------------------------------------
 
 def test_require_nucleotide_valid_dna():
@@ -48,7 +48,7 @@ def test_require_nucleotide_with_degenerates():
 
 
 # ---------------------------------------------------------------------------
-# require_nucleotide — protein detection
+# require_nucleotide: protein detection
 # ---------------------------------------------------------------------------
 
 def test_require_nucleotide_rejects_hard_letter():
@@ -74,7 +74,7 @@ def test_force_nucleotide_bypasses_heuristic():
 
 
 # ---------------------------------------------------------------------------
-# require_nucleotide — alphabet mismatch
+# require_nucleotide: alphabet mismatch
 # ---------------------------------------------------------------------------
 
 def test_require_nucleotide_rejects_mixed_tu():

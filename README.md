@@ -58,7 +58,7 @@ chr2    ...
 ##END      FILE_CRC=...
 ```
 
-Full specification: [docs/FASTB_v3_spec.md](docs/FASTB_v3_spec.md)
+Full specification: [FASTB-SPEC.md](FASTB-SPEC.md)
 
 ---
 
@@ -82,7 +82,7 @@ Run `fastb <subcommand> --help` for options.
 
 - **DNA**: A, C, G, T plus IUPAC degenerate codes (W S M K R Y B D H V N) and gap (`-`).
 - **RNA**: A, C, G, U plus IUPAC degenerate codes and gap.
-- **Amino acids** (`ALPHA=P`): detected and rejected with a clear error (exit code 4). The file format reserves `ALPHA=P` for protein records; protein codec support is planned for a future release under the same `.fastb` extension, CLI, and tooling. FASTB is a unified format — there will be no sister protein format.
+- **Amino acids** (`ALPHA=P`): detected and rejected with a clear error (exit code 4). The file format reserves `ALPHA=P` for protein records; protein codec support is planned for a future release under the same `.fastb` extension, CLI, and tooling. FASTB is a unified format. There will be no sister protein format.
 
 ---
 
@@ -106,4 +106,4 @@ Run `fastb <subcommand> --help` for options.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

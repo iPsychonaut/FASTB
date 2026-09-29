@@ -5,6 +5,9 @@ from fastb.core import (
     read_file,
     read_index,
     read_record,
+    iter_raw,
+    encode_sequence,
+    decode_sequence,
     MAGIC_LINE,
 )
 from fastb.alphabet import (
@@ -16,7 +19,7 @@ from fastb.alphabet import (
 __version__ = "3.0.0"
 __all__ = [
     "Record", "write_file", "read_file", "read_index", "read_record",
-    "MAGIC_LINE",
+    "MAGIC_LINE", "iter_raw", "encode_sequence", "decode_sequence",
     "AlphabetError", "ProteinDetectedError", "detect_alphabet",
     "__version__",
 ]

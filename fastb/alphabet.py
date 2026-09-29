@@ -19,6 +19,8 @@ designed for this extension.
 
 from __future__ import annotations
 
+import numpy as np
+
 # ---------------------------------------------------------------------------
 # Tunable thresholds
 # ---------------------------------------------------------------------------
@@ -61,12 +63,12 @@ class ProteinDetectedError(AlphabetError):
 def detect_alphabet(seq_upper: str) -> str:
     """Classify a sequence as 'dna', 'rna', 'protein', or 'ambiguous'.
 
-    Pure classifier — does NOT raise. Callers decide what to do with
+    Pure classifier. Does NOT raise. Callers decide what to do with
     the result.
 
     Returned strings are lowercase category labels used internally.
     They are NOT the same as the file-format ALPHA= values (which are
-    single letters: D, R, P). This case split is intentional — it keeps
+    single letters: D, R, P). This case split is intentional. It keeps
     "classifier decided" distinct from "header field value".
 
     Rules, in priority order:
@@ -118,8 +120,17 @@ def detect_alphabet(seq_upper: str) -> str:
 # Validation chokepoint
 # ---------------------------------------------------------------------------
 
+def _letter_counts(seq: str) -> "np.ndarray":
+    """Count of each byte value, case-folded to uppercase. Shape (256,)."""
+    raw = np.frombuffer(seq.encode("ascii", errors="replace"), dtype=np.uint8)
+    counts = np.bincount(raw, minlength=256)
+    counts[ord("A"):ord("Z") + 1] += counts[ord("a"):ord("z") + 1]
+    counts[ord("a"):ord("z") + 1] = 0
+    return counts
+
+
 def require_nucleotide(
-    seq_upper: str,
+    seq: str,
     declared_alpha: str,
     name: str,
     force_nucleotide: bool = False,
@@ -133,43 +144,44 @@ def require_nucleotide(
 
     This is the ONLY place in the core encoder that gates what gets
     written to a v3 file as nucleotide content. When amino-acid support
-    lands, a sibling `require_protein` function will be added, and
-    fastb/core.py will call a dispatcher (tentatively `classify_and_route`)
-    that routes each record to the appropriate validator+codec based on
-    detect_alphabet() output.
+    lands, a sibling `require_protein` function will be added.
 
     Args:
-        seq_upper: uppercased sequence string.
+        seq: sequence string, any case.
         declared_alpha: "D" or "R" from the Record.
         name: record name, used in error messages.
         force_nucleotide: if True, skip the degenerate-fraction heuristic
             (rule 3 in detect_alphabet). Does NOT bypass the hard-letter
-            check (rule 1) — F/I/L/P/Q/E/Z are never nucleotides.
+            check (rule 1). F/I/L/P/Q/E/Z are never nucleotides.
     """
-    # Hard protein letters — never nucleotides, no bypass possible
-    for ch in seq_upper:
-        if ch in _PROTEIN_HARD_LETTERS:
-            raise ProteinDetectedError(
-                f"Record {name!r}: sequence appears to be amino acids "
-                f"(contains {ch!r} which is not in the IUPAC nucleotide alphabet). "
-                f"FASTB v3 encodes nucleotides only; amino-acid support is planned "
-                f"for a future release."
-            )
+    counts = _letter_counts(seq)
 
-    # Mixed T/U
-    if "T" in seq_upper and "U" in seq_upper:
+    def present(letters) -> str:
+        return "".join(ch for ch in sorted(letters) if counts[ord(ch)])
+
+    # Hard protein letters: never nucleotides, no bypass possible
+    hard = present(_PROTEIN_HARD_LETTERS)
+    if hard:
+        raise ProteinDetectedError(
+            f"Record {name!r}: sequence appears to be amino acids "
+            f"(contains {hard[0]!r} which is not in the IUPAC nucleotide alphabet). "
+            f"FASTB v3 encodes nucleotides only; amino-acid support is planned "
+            f"for a future release."
+        )
+
+    has_t = bool(counts[ord("T")])
+    has_u = bool(counts[ord("U")])
+    if has_t and has_u:
         raise AlphabetError(
             f"Record {name!r}: contains both T and U. FASTB v3 requires a single "
             f"nucleotide alphabet per record (ALPHA=D uses T, ALPHA=R uses U)."
         )
-
-    # Declared-vs-content mismatch
-    if declared_alpha == "D" and "U" in seq_upper:
+    if declared_alpha == "D" and has_u:
         raise AlphabetError(
             f"Record {name!r}: declared ALPHA=D but sequence contains U. "
             f"Declare ALPHA=R or convert U to T before encoding."
         )
-    if declared_alpha == "R" and "T" in seq_upper:
+    if declared_alpha == "R" and has_t:
         raise AlphabetError(
             f"Record {name!r}: declared ALPHA=R but sequence contains T. "
             f"Declare ALPHA=D or convert T to U before encoding."
@@ -177,17 +189,18 @@ def require_nucleotide(
 
     # Illegal characters
     legal = _LEGAL_DNA if declared_alpha == "D" else _LEGAL_RNA
-    for ch in seq_upper:
-        if ch not in legal:
-            raise AlphabetError(
-                f"Record {name!r}: illegal symbol {ch!r} for ALPHA={declared_alpha}. "
-                f"Legal characters: {sorted(legal)}"
-            )
+    seen = np.flatnonzero(counts)
+    illegal = [chr(b) for b in seen if chr(b) not in legal]
+    if illegal:
+        raise AlphabetError(
+            f"Record {name!r}: illegal symbol {illegal[0]!r} for ALPHA={declared_alpha}. "
+            f"Legal characters: {sorted(legal)}"
+        )
 
     # Degenerate-fraction heuristic (bypassable with --force-nucleotide)
-    if not force_nucleotide and len(seq_upper) >= PROTEIN_HEURISTIC_MIN_LENGTH:
-        deg_count = sum(1 for ch in seq_upper if ch in _DEGENERATE_LETTERS)
-        fraction = deg_count / len(seq_upper)
+    if not force_nucleotide and len(seq) >= PROTEIN_HEURISTIC_MIN_LENGTH:
+        deg_count = int(sum(counts[ord(ch)] for ch in _DEGENERATE_LETTERS))
+        fraction = deg_count / len(seq)
         if fraction > PROTEIN_HEURISTIC_DEGENERATE_FRACTION:
             raise ProteinDetectedError(
                 f"Record {name!r}: sequence appears to be amino acids "

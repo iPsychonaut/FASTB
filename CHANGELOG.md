@@ -2,17 +2,24 @@
 
 ## [3.0.0] - UNRELEASED
 
-Initial public release.
+First release. Format defined in [FASTB-SPEC.md](FASTB-SPEC.md).
 
-### Added
-- FASTB v3 format: ASCII-header + bit-packed binary payload hybrid.
-- O(1) random access by record name via footer index.
-- CRC32 payload integrity per record.
-- `fastb` CLI with subcommands: view, head, stats, extract, encode, decode, verify.
-- Alphabet detection layer (`fastb/alphabet.py`) with explicit extension point for future amino-acid support.
-- Reserved `ALPHA=AA` header value for future protein records.
-- Specification document at [docs/FASTB_v3_spec.md](docs/FASTB_v3_spec.md).
+### Format
+- Every base is stored at 2 bits. N and lowercase positions are run lists in
+  the header (`NRUNS=`, `MASK=`). 4-bit storage is used only for records with
+  IUPAC codes other than N, or gaps.
+- Records end with an explicit `BYTES=` count and a newline. No guessing.
+- Plain-text index footer. Jump to record k or to a record by name.
+- Readers ignore header keys they do not know.
 
-### Notes
-- Previous FASTB versions (v1, v2, v2.1) were exploratory and are not preserved. v3 is the first production release.
-- `ALPHA=` header field replaces the previous `NUC=` field name, using full-word values (DNA, RNA) instead of single letters (D, R) for readability and forward compatibility with amino-acid records.
+### Code
+- Encoder and decoder run on numpy lookup tables.
+- `fastb` CLI: view, head, stats, extract, encode, decode, verify.
+- Alphabet checks reject protein FASTA with exit code 4.
+- Byte-exact fixtures in `tests/fixtures/`.
+
+### Removed
+- The v1 reader. It never returned data.
+- The v2 TLV format, its CRC-probe end-of-record heuristic, and the 3-bit
+  tier. No released reader supports v1 or v2 files.
+- The HTML editor and the PyQt5 compare tool.

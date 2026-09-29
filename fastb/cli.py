@@ -255,7 +255,7 @@ def _cmd_encode(args) -> int:
         has_u = "U" in seq_upper
 
         if has_t and has_u:
-            print(f"fastb encode: record {name!r} contains both T and U — "
+            print(f"fastb encode: record {name!r} contains both T and U; "
                   "cannot determine alphabet.", file=sys.stderr)
             return 4
 
@@ -280,7 +280,7 @@ def _cmd_encode(args) -> int:
 
         fastb_records.append(fastb.Record(name, seq, alpha=alpha))
 
-    # All records validated — now write atomically via in-memory buffer
+    # All records validated. Now write atomically via in-memory buffer
     import io as _io
     buf = _io.BytesIO()
     fastb.write_file(fastb_records, buf, file_comment=args.comment)
