@@ -5,15 +5,24 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fastb"
 version = "3.0.0"
-description = "FASTB v3: binary sequence format"
+description = "FASTB: 2-bit binary sequence format, a drop-in replacement for gzipped FASTA"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Ian M. Bollinger", email = "ian.bollinger@entheome.org"}]
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.24"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/iPsychonaut/FASTB"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+bench = ["psutil>=5.9"]
 
 [project.scripts]
 fastb = "fastb.cli:main"
