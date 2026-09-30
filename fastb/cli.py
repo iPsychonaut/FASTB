@@ -11,7 +11,7 @@ import sys
 
 import fastb
 from fastb.alphabet import AlphabetError
-from fastb.io import iter_fasta, iter_records, write_records, wrap_bytes
+from fastb.io import iter_fasta, iter_records, stream_fasta, write_records, wrap_bytes
 
 
 def _out():
@@ -25,6 +25,11 @@ def _emit(out, name: str, seq: str, wrap: int) -> None:
 def _wrap_arg(p):
     p.add_argument("-w", "--wrap", type=int, default=80, metavar="N",
                    help="Wrap sequence to N chars (0=no wrap, default 80).")
+
+
+def _threads_arg(p):
+    p.add_argument("-p", "--threads", type=int, default=1, metavar="N",
+                   help="Decode chunks in N worker processes (default 1).")
 
 
 def _strip_ext(path: str, exts) -> str:
@@ -45,32 +50,22 @@ def _add_cat_parser(sub, name, help_text):
     p.add_argument("-n", "--names", metavar="NAME[,NAME...]",
                    help="Only emit these records (comma-separated).")
     _wrap_arg(p)
+    _threads_arg(p)
     p.set_defaults(func=_cmd_cat, cmd=name)
 
 
 def _cmd_cat(args) -> int:
-    out = _out()
     names = set(args.names.split(",")) if args.names else None
-    if names:
-        try:
-            idx = fastb.read_index(args.file)
-        except ValueError as e:
-            print(f"fastb {args.cmd}: {e}", file=sys.stderr)
-            return 3
-        missing = names - set(idx)
-        for name in sorted(missing):
-            print(f"fastb {args.cmd}: record {name!r} not found", file=sys.stderr)
-        for name in idx:
-            if name in names:
-                rec = fastb.read_record(args.file, name)
-                _emit(out, rec.name, rec.sequence, args.wrap)
-        return 2 if missing else 0
     try:
-        for name, seq in iter_records(args.file):
-            _emit(out, name, seq, args.wrap)
+        stream_fasta(args.file, _out(), args.wrap, args.threads, names)
     except ValueError as e:
         print(f"fastb {args.cmd}: {e}", file=sys.stderr)
         return 3
+    if names:
+        missing = names - set(fastb.read_index(args.file))
+        for name in sorted(missing):
+            print(f"fastb {args.cmd}: record {name!r} not found", file=sys.stderr)
+        return 2 if missing else 0
     return 0
 
 
@@ -201,7 +196,7 @@ def _cmd_encode(args) -> int:
     out_path = args.output or _strip_ext(
         _strip_ext(args.file, (".gz",)), (".fasta", ".fa", ".fna")) + ".fastb"
     try:
-        n = write_records(out_path, iter_fasta(args.file), file_comment=args.comment,
+        n = write_records(out_path, iter_fasta(args.file, as_bytes=True), file_comment=args.comment,
                           force_nucleotide=args.force_nucleotide)
     except AlphabetError as e:
         print(f"fastb encode: {e}", file=sys.stderr)
@@ -219,6 +214,7 @@ def _add_decode_parser(sub):
     p.add_argument("-o", "--output", metavar="PATH",
                    help="Output path (default: replace .fastb with .fasta).")
     _wrap_arg(p)
+    _threads_arg(p)
     p.set_defaults(func=_cmd_decode)
 
 
@@ -226,8 +222,7 @@ def _cmd_decode(args) -> int:
     out_path = args.output or _strip_ext(args.file, (".fastb",)) + ".fasta"
     try:
         with open(out_path, "wb") as fout:
-            for name, seq in iter_records(args.file):
-                _emit(fout, name, seq, args.wrap)
+            stream_fasta(args.file, fout, args.wrap, args.threads)
     except ValueError as e:
         print(f"fastb decode: {e}", file=sys.stderr)
         return 3

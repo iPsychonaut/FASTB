@@ -53,7 +53,12 @@ _UPPER[ord("a"):ord("z") + 1] -= 32
 
 
 def _unpack_tables(alpha: str):
-    """Byte -> ASCII lookup tables for one alphabet. Shape (256, 4) and (256, 2)."""
+    """Byte -> ASCII lookup tables for one alphabet.
+
+    Returned as one machine word per byte (uint32 for 2-bit, uint16 for 4-bit)
+    so a whole chunk decodes with a single 1-D gather; indexing a 2-D uint8
+    table is 4x slower in numpy.
+    """
     t = "T" if alpha == "D" else "U"
     sym2 = np.frombuffer(("ACG" + t).encode(), dtype=np.uint8)
     b = np.arange(256, dtype=np.uint8)
@@ -66,10 +71,16 @@ def _unpack_tables(alpha: str):
     if alpha == "R":
         sym4[0b0001] = ord("U")
     lut4 = np.stack([sym4[b >> 4], sym4[b & 0xF]], axis=1)
-    return lut2, lut4
+    return (np.frombuffer(np.ascontiguousarray(lut2).tobytes(), dtype=np.uint32),
+            np.frombuffer(np.ascontiguousarray(lut4).tobytes(), dtype=np.uint16))
 
 
 _UNPACK = {"D": _unpack_tables("D"), "R": _unpack_tables("R")}
+
+# Bases decoded per chunk. Multiple of 4 and 2 (bases per payload byte); the
+# CLI rounds it to a multiple of the wrap width so every chunk starts at
+# column 0 and chunks can be decoded independently, in any process.
+CHUNK_BASES = 16_000_000
 
 
 class Record:
@@ -77,8 +88,9 @@ class Record:
 
     __slots__ = ("name", "sequence", "alpha", "comment")
 
-    def __init__(self, name: str, sequence: str, alpha: str = "D",
+    def __init__(self, name: str, sequence, alpha: str = "D",
                  comment: Optional[str] = None):
+        """sequence may be str or ASCII bytes; bytes avoid a copy on encode."""
         if "\t" in name or " " in name or "\n" in name or name.startswith(">"):
             raise ValueError("name must not contain whitespace, newline, or '>'")
         if alpha not in ("D", "R"):
@@ -125,54 +137,108 @@ def _decode_runs(s: str) -> List[Tuple[int, int]]:
     return [(int(a, 16), int(b, 16)) for a, b in (p.split(":") for p in s.split(","))]
 
 
+def _merge_runs(runs: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Join runs that touch, so the header does not depend on CHUNK_BASES."""
+    out: List[Tuple[int, int]] = []
+    for s, l in runs:
+        if out and out[-1][0] + out[-1][1] == s:
+            out[-1] = (out[-1][0], out[-1][1] + l)
+        else:
+            out.append((s, l))
+    return out
+
+
+def _run_bounds(runs: List[Tuple[int, int]]) -> Tuple[np.ndarray, np.ndarray]:
+    """Run list -> sorted (starts, ends) int64 arrays for searchsorted lookups."""
+    if not runs:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    a = np.array(runs, dtype=np.int64)
+    return a[:, 0], a[:, 0] + a[:, 1]
+
+
 # ---------------------------------------------------------------------------
 # Codec
 # ---------------------------------------------------------------------------
 
-def encode_sequence(seq: str, alpha: str) -> Tuple[int, bytes, str, str]:
-    """Pack one sequence. Returns (enc, payload, nruns_field, mask_field)."""
-    raw = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
-    up = _UPPER[raw]
-    mask = _encode_runs(_runs(raw != up))
-
-    codes = _PACK2[up]
-    if not (codes == 255).any():
-        nruns = _encode_runs(_runs(up == ord("N")))
-        n = len(codes)
-        padded = np.zeros(-(-n // 4) * 4, dtype=np.uint8)
-        padded[:n] = codes
-        q = padded.reshape(-1, 4)
-        packed = (q[:, 0] << 6) | (q[:, 1] << 4) | (q[:, 2] << 2) | q[:, 3]
-        return 2, packed.astype(np.uint8).tobytes(), nruns, mask
-
-    codes = _PACK4[up]
-    if (codes == 255).any():
-        bad = chr(int(up[codes == 255][0]))
-        raise ValueError(f"illegal symbol {bad!r} for ALPHA={alpha}")
+def _pack(codes: np.ndarray, per_byte: int) -> bytes:
     n = len(codes)
-    padded = np.zeros(-(-n // 2) * 2, dtype=np.uint8)
+    padded = np.zeros(-(-n // per_byte) * per_byte, dtype=np.uint8)
     padded[:n] = codes
-    q = padded.reshape(-1, 2)
-    packed = (q[:, 0] << 4) | q[:, 1]
-    return 4, packed.astype(np.uint8).tobytes(), "", mask
+    q = padded.reshape(-1, per_byte)
+    if per_byte == 4:
+        packed = (q[:, 0] << 6) | (q[:, 1] << 4) | (q[:, 2] << 2) | q[:, 3]
+    else:
+        packed = (q[:, 0] << 4) | q[:, 1]
+    return packed.astype(np.uint8).tobytes()
+
+
+def encode_sequence(seq, alpha: str) -> Tuple[int, bytes, str, str]:
+    """Pack one sequence. Returns (enc, payload, nruns_field, mask_field).
+
+    Works in CHUNK_BASES pieces so temporaries stay a few tens of MB
+    regardless of record length. A record falls back to 4-bit when any
+    chunk holds a symbol outside ACGT/U/N; the 2-bit pieces already packed
+    are discarded and the record is re-encoded from the start.
+    """
+    raw = np.frombuffer(seq.encode("ascii") if isinstance(seq, str) else seq, dtype=np.uint8)
+    n = len(raw)
+    for enc, table, per_byte in ((2, _PACK2, 4), (4, _PACK4, 2)):
+        pieces, mask, nruns = [], [], []
+        for i in range(0, n, CHUNK_BASES):
+            r = raw[i:i + CHUNK_BASES]
+            up = np.take(_UPPER, r)
+            mask += [(s + i, l) for s, l in _runs(r != up)]
+            codes = np.take(table, up)
+            if (codes == 255).any():
+                if enc == 4:
+                    bad = chr(int(up[codes == 255][0]))
+                    raise ValueError(f"illegal symbol {bad!r} for ALPHA={alpha}")
+                break
+            if enc == 2:
+                nruns += [(s + i, l) for s, l in _runs(up == ord("N"))]
+            pieces.append(_pack(codes, per_byte))
+        else:
+            return (enc, b"".join(pieces),
+                    _encode_runs(_merge_runs(nruns)), _encode_runs(_merge_runs(mask)))
+    raise AssertionError("unreachable")
+
+
+def decode_chunk(payload: bytes, enc: int, alpha: str, base: int, length: int,
+                 nruns: Tuple[np.ndarray, np.ndarray],
+                 mask: Tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+    """Unpack one payload slice to ASCII. Pure function, safe in any process.
+
+    base: position of the first base of this slice within the record.
+    length: bases to produce (trims the padding of the last byte).
+    nruns, mask: (starts, ends) arrays for the whole record; only runs that
+    overlap [base, base + length) are applied.
+    """
+    lut2, lut4 = _UNPACK[alpha]
+    b = np.frombuffer(payload, dtype=np.uint8)
+    if enc == 2:
+        out = np.take(lut2, b).view(np.uint8)
+    elif enc == 4:
+        out = np.take(lut4, b).view(np.uint8)
+    else:
+        raise ValueError(f"Unknown ENC={enc}")
+    out = out[:length]
+    end = base + length
+    for (starts, ends), value, orr in ((nruns, ord("N"), False), (mask, 0x20, True)):
+        lo = np.searchsorted(ends, base, side="right")
+        hi = np.searchsorted(starts, end, side="left")
+        for s, e in zip(starts[lo:hi].tolist(), ends[lo:hi].tolist()):
+            a, z = max(s - base, 0), min(e - base, length)
+            if orr:
+                out[a:z] |= value
+            else:
+                out[a:z] = value
+    return out
 
 
 def decode_sequence(payload: bytes, length: int, enc: int, alpha: str,
                     nruns: List[Tuple[int, int]], mask: List[Tuple[int, int]]) -> str:
-    """Unpack one payload back to a sequence string."""
-    lut2, lut4 = _UNPACK[alpha]
-    b = np.frombuffer(payload, dtype=np.uint8)
-    if enc == 2:
-        out = lut2[b].reshape(-1)[:length]
-    elif enc == 4:
-        out = lut4[b].reshape(-1)[:length]
-    else:
-        raise ValueError(f"Unknown ENC={enc}")
-    out = np.ascontiguousarray(out)
-    for s, l in nruns:
-        out[s:s + l] = ord("N")
-    for s, l in mask:
-        out[s:s + l] |= 0x20
+    """Unpack one whole payload back to a sequence string."""
+    out = decode_chunk(payload, enc, alpha, 0, length, _run_bounds(nruns), _run_bounds(mask))
     return out.tobytes().decode("ascii")
 
 

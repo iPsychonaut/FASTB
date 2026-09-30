@@ -74,20 +74,40 @@ to any record.
 
 ## Measurements
 
-Synthetic 20 Mb single-record FASTA, 80 columns, 10% of bases in lowercase
-runs and 1% in N runs. Windows 11, Python 3.14, numpy 2.5, one thread.
-Command: `python bench/bench.py syn.fasta`. gzip is used because pigz is not
-on this machine; both are single-threaded here.
+Synthetic single-record FASTA, 80 columns, 10% of bases in lowercase runs
+and 1% in N runs. WSL2 Ubuntu 24.04 on a Ryzen 7 5800H (16 threads), pigz
+2.8, Python 3.12, numpy 2.5.3, files on ext4, best of 3. Wall time and peak
+RSS from `/usr/bin/time -f "%e %M"`. `fastb cat` output was byte-identical
+to `pigz -dc` for every file. Script: `bench/sweep.sh`.
 
-| Tool | Bytes on disk | Encode s | Decode s | Peak RSS MB |
-|---|---|---|---|---|
-| gzip -6 | 6,460,810 | 2.97 | 0.11 | 9 |
-| fastb | 5,022,303 | 0.46 | 0.28 | 138 |
+| Input | Tool | Bytes on disk | Encode s | Decode s | Peak RSS MB |
+|---|---|---|---|---|---|
+| 5 MB | pigz -6 -p 16 | 1,613,641 | 0.06 | 0.02 | 10 |
+| 5 MB | fastb | 1,255,465 | 0.20 | 0.18 | 89 |
+| 50 MB | pigz -6 -p 16 | 16,141,509 | 0.51 | 0.17 | 10 |
+| 50 MB | fastb | 12,558,640 | 0.71 | 0.36 | 274 |
+| 200 MB | pigz -6 -p 1 | 64,554,815 | 16.97 | 0.77 | 3 |
+| 200 MB | pigz -6 -p 16 | 64,554,815 | 1.85 | 0.63 | 10 |
+| 200 MB | fastb | 50,239,522 | 2.14 | 0.90 | 462 |
+| 200 MB | fastb -p 4 | 50,239,522 | 2.14 | 0.75 | 121 |
 
-Of the 0.28 s decode, 0.06 s is decoding and the rest is interpreter and
-numpy start-up, so the gap closes on larger files. The Phase 4 gate (three
-real EGAP intermediate files against `pigz -6 -p N` and `pigz -dc`) has not
-been run yet; its table will replace this one.
+What the numbers say:
+
+- Bytes: fastb is 22% smaller than pigz -6 at every size.
+- `pigz -dc` does not get faster with more threads (0.77 s at 1, 0.63 s at
+  16). Inflate is serial. So the decode target is fixed at about 300 MB/s
+  of FASTA out.
+- fastb decode is about 0.2 s behind pigz at every size. That 0.2 s is
+  Python and numpy start-up, not decoding: the 2-bit unpack of 200 MB takes
+  0.11 s, wrapping 0.13 s, and writing the file 0.3 s (a plain `cat` of the
+  same file takes 0.32 s on this machine). On files under about 10 MB the
+  start-up cost dominates and pigz wins outright.
+- `fastb -p N` splits records into 16 Mb chunks across N processes. It helps
+  on large files (0.90 to 0.75 s) and hurts on small ones (process start).
+- Encode: fastb single-threaded beats pigz up to 4 threads and loses to
+  pigz -p 16 by about 15%.
+
+The Phase 4 gate (three real EGAP intermediate files) has not been run yet.
 
 ## Not in scope
 

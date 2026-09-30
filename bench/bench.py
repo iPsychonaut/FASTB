@@ -72,10 +72,10 @@ def main():
     fb_size = os.path.getsize(fb)
     out = open(os.path.join(work, "fb.out"), "wb")
     t = time.perf_counter()
-    subprocess.run([py, "-m", "fastb.cli", "cat", fb], stdout=out, check=True)
+    subprocess.run([py, "-m", "fastb.cli", "cat", fb, "-p", str(args.threads)], stdout=out, check=True)
     t_dec = time.perf_counter() - t
     out.close()
-    rows.append(("fastb", fb_size, t_enc, t_dec, m_enc))
+    rows.append((f"fastb -p {args.threads}", fb_size, t_enc, t_dec, m_enc))
 
     fa_size = os.path.getsize(copy)
     print(f"input: {fasta} ({fa_size / 1e6:.2f} MB), threads={args.threads}")

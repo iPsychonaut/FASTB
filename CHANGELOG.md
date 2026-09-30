@@ -13,7 +13,9 @@ First release. Format defined in [FASTB-SPEC.md](FASTB-SPEC.md).
 - Readers ignore header keys they do not know.
 
 ### Code
-- Encoder and decoder run on numpy lookup tables.
+- Encoder and decoder run on numpy lookup tables in 16 Mb chunks; memory
+  is bounded per chunk, not per record.
+- `fastb cat -p N` and `fastb decode -p N` decode chunks in N processes.
 - `fastb` CLI: view, head, stats, extract, encode, decode, verify.
 - Alphabet checks reject protein FASTA with exit code 4.
 - Byte-exact fixtures in `tests/fixtures/`.

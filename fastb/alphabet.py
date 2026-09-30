@@ -120,9 +120,11 @@ def detect_alphabet(seq_upper: str) -> str:
 # Validation chokepoint
 # ---------------------------------------------------------------------------
 
-def _letter_counts(seq: str) -> "np.ndarray":
-    """Count of each byte value, case-folded to uppercase. Shape (256,)."""
-    raw = np.frombuffer(seq.encode("ascii", errors="replace"), dtype=np.uint8)
+def _letter_counts(seq) -> "np.ndarray":
+    """Count of each byte value, case-folded to uppercase. Shape (256,). seq: str or bytes."""
+    if isinstance(seq, str):
+        seq = seq.encode("ascii", errors="replace")
+    raw = np.frombuffer(seq, dtype=np.uint8)
     # bincount upcasts its input to int64; chunking keeps that temp at 8 MB.
     counts = np.zeros(256, dtype=np.int64)
     for i in range(0, len(raw), 1 << 20):
@@ -133,7 +135,7 @@ def _letter_counts(seq: str) -> "np.ndarray":
 
 
 def require_nucleotide(
-    seq: str,
+    seq,
     declared_alpha: str,
     name: str,
     force_nucleotide: bool = False,
@@ -150,7 +152,7 @@ def require_nucleotide(
     lands, a sibling `require_protein` function will be added.
 
     Args:
-        seq: sequence string, any case.
+        seq: sequence as str or ASCII bytes, any case.
         declared_alpha: "D" or "R" from the Record.
         name: record name, used in error messages.
         force_nucleotide: if True, skip the degenerate-fraction heuristic
