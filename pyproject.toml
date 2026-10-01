@@ -9,7 +9,7 @@ description = "FASTB: 2-bit binary sequence format, a drop-in replacement for gz
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Ian M. Bollinger", email = "ian.bollinger@entheome.org"}]
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dependencies = ["numpy>=1.24"]
 classifiers = [
     "Programming Language :: Python :: 3",

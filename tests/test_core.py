@@ -1,5 +1,7 @@
 """Tests for fastb.core: round-trips, random access, and error paths."""
 
+from __future__ import annotations
+
 import io
 import zlib
 

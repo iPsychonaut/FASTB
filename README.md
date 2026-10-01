@@ -19,7 +19,7 @@ pip install fastb
 From a checkout, `pip install -e .[dev]` adds pytest. `pip install fastb[bench]`
 adds psutil for the benchmark script. A Bioconda recipe is in `recipe/`.
 
-Requires Python 3.9 or newer and numpy.
+Requires Python 3.8 or newer and numpy.
 
 ## Command line
 
