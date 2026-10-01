@@ -62,10 +62,12 @@ rec = fastb.read_record("out.fastb", 0)                        # by position
 
 ## How it stores sequence
 
-Every base is 2 bits (A=00, C=01, G=10, T/U=11). Positions holding N, and
-positions that were lowercase, are stored as (start, length) run lists in the
-record header. This is the UCSC `.2bit` idea. A record only falls back to 4
-bits per base when it holds an IUPAC code other than N, or a gap.
+Every base is 2 bits (A=00, C=01, G=10, T/U=11). Positions holding N,
+positions holding an ambiguity code (K, R, Y and the other IUPAC letters) or
+a gap, and positions that were lowercase are stored as short lists in the
+record header. This is the UCSC `.2bit` idea, extended to ambiguity codes. A
+record is written at 4 bits per base only when its ambiguity list would take
+more room than 4-bit packing, which means roughly more than 1 base in 40.
 
 Each record carries its length, encoding, alphabet (DNA or RNA), CRC32, and
 payload byte count in a plain-text header line, so `grep '^>'` works on a
@@ -107,7 +109,40 @@ What the numbers say:
 - Encode: fastb single-threaded beats pigz up to 4 threads and loses to
   pigz -p 16 by about 15%.
 
-The Phase 4 gate (three real EGAP intermediate files) has not been run yet.
+## Inside EGAP
+
+Three E. coli samples (ONT + Illumina hybrid, Illumina with a reference,
+PacBio) run end to end through EGAP with `--intermediate_format pigz` and
+then `fastb`. Same machine as above, 16 threads, 48 GB, each arm with its own
+fresh input and output folders, disk use sampled every 30 s with `du -sb`.
+The fastb arm ran format 3.0; the 3.1 column re-encodes that arm's 54
+`.fastb` files afterwards (`fastb cat -w 0 x.fastb | fastb encode`), with
+every round trip checked by `cmp`.
+
+| | pigz | fastb 3.0 | fastb 3.1 |
+|---|---|---|---|
+| Wall time, 3 samples | 6,852 s | 6,843 s | not rerun |
+| Peak disk | 23.523 GB | 23.517 GB | not rerun |
+| Compressed FASTA, all files | 138,976,865 B | 129,496,900 B | 125,362,296 B |
+| The 54 files FASTB encodes | 79,692,469 B | 70,243,637 B | 66,109,033 B |
+| Hybrid final assembly (4.66 Mb, 6 IUPAC bases) | 1,452,135 B | 1,755,783 B | 1,167,801 B |
+
+What the numbers say:
+
+- FASTB costs EGAP no time and saves about 10% of its FASTA bytes. On a 5 Mb
+  genome that is about 14 MB out of 23 GB, because FASTA is under 1% of what
+  EGAP writes; reads, VCF, and GFF files are the rest.
+- On the files it encodes, FASTB 3.1 is 17% smaller than pigz -6.
+- Format 3.0 was larger than pigz on every Pilon-polished assembly: 6
+  ambiguity codes put 3 of 17 contigs in 4-bit. That is why 3.1 has the
+  IUPAC list.
+- 46 of 100 FASTA files stayed on pigz, all for sound reasons: 36 protein
+  files from Compleasm, and 10 that were empty or whose headers carry
+  descriptions that FASTB would drop (Racon's `LN:i:` tags, for example).
+- The final assemblies were not byte-identical between runs, with or without
+  FASTB. The hybrid assembly differed between two pigz runs, and the one
+  PacBio difference (4 bp in one contig) was already present in Flye's raw
+  output, before FASTB is first used.
 
 ## Not in scope
 

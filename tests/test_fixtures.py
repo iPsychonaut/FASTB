@@ -40,7 +40,7 @@ def test_decode_matches_fasta(name):
 def test_n_runs_keep_2bit():
     """A record with N gaps must stay at ENC=2 and restore N (and n) on decode."""
     seq = "ACGT" * 10 + "N" * 20 + "acgtnnnn" + "ACGT" * 10
-    enc, payload, nruns, mask = fastb.encode_sequence(seq, "D")
+    enc, payload, nruns, mask, iupac = fastb.encode_sequence(seq, "D")
     assert enc == 2 and len(payload) == -(-len(seq) // 4)
     assert nruns and mask
     assert fastb.decode_sequence(payload, len(seq), 2, "D",

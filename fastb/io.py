@@ -9,8 +9,9 @@ from typing import Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 
-from fastb.core import (CHUNK_BASES, Record, _decode_runs, _parse_header_line,
-                        _run_bounds, decode_chunk, iter_raw, read_file, write_file)
+from fastb.core import (CHUNK_BASES, Record, _decode_iupac, _decode_runs, _iupac_bounds,
+                        _parse_header_line, _run_bounds, decode_chunk, iter_raw, read_file,
+                        write_file)
 
 
 def open_text_or_gz(path: str):
@@ -155,6 +156,7 @@ def _plan(fields: dict, payload_offset: int, width: int) -> List[tuple]:
     alpha = fields["ALPHA"]
     nruns = _run_bounds(_decode_runs(fields.get("NRUNS", "")))
     mask = _run_bounds(_decode_runs(fields.get("MASK", "")))
+    iupac = _iupac_bounds(_decode_iupac(fields.get("IUPAC", "")))
     step = _chunk_bases(width, per_byte)
     tasks = []
     for base in range(0, max(length, 1), step):
@@ -163,12 +165,12 @@ def _plan(fields: dict, payload_offset: int, width: int) -> List[tuple]:
         final = base + count >= length
         # Only the runs touching this chunk travel with the task (keeps pickles small).
         sub = []
-        for starts, ends in (nruns, mask):
-            lo = np.searchsorted(ends, base, side="right")
-            hi = np.searchsorted(starts, base + count, side="left")
-            sub.append((starts[lo:hi], ends[lo:hi]))
+        for arrays in (nruns, mask, iupac):
+            lo = np.searchsorted(arrays[1], base, side="right")
+            hi = np.searchsorted(arrays[0], base + count, side="left")
+            sub.append(tuple(a[lo:hi] for a in arrays))
         tasks.append((payload_offset + base // per_byte, nbytes, enc, alpha, base, count,
-                      sub[0], sub[1], width, final))
+                      sub[0], sub[1], sub[2], width, final))
     return tasks
 
 
@@ -177,12 +179,12 @@ _FILES: dict = {}
 
 def _decode_task(path: str, task: tuple) -> bytes:
     """Read one chunk of payload from `path` and return it as wrapped FASTA bytes."""
-    offset, nbytes, enc, alpha, base, count, nruns, mask, width, final = task
+    offset, nbytes, enc, alpha, base, count, nruns, mask, iupac, width, final = task
     f = _FILES.get(path)
     if f is None:
         f = _FILES[path] = open(path, "rb")
     f.seek(offset)
-    out = decode_chunk(f.read(nbytes), enc, alpha, base, count, nruns, mask)
+    out = decode_chunk(f.read(nbytes), enc, alpha, base, count, nruns, mask, iupac)
     return wrap_bytes(out, width, final)
 
 

@@ -1,4 +1,4 @@
-"""FASTB v3: binary sequence format."""
+"""FASTB: 2-bit binary sequence format (file format 3.1)."""
 from fastb.core import (
     Record,
     write_file,
@@ -17,7 +17,7 @@ from fastb.alphabet import (
     detect_alphabet,
 )
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __all__ = [
     "Record", "write_file", "read_file", "read_index", "read_record",
     "MAGIC_LINE", "iter_records", "write_records", "iter_fasta", "iter_raw", "encode_sequence", "decode_sequence",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fastb"
-version = "3.0.0"
+version = "3.1.0"
 description = "FASTB: 2-bit binary sequence format, a drop-in replacement for gzipped FASTA"
 readme = "README.md"
 license = {text = "MIT"}

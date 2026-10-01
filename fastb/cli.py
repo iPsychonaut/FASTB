@@ -262,7 +262,7 @@ def _add_info_parser(sub):
 
 
 def _cmd_info(args) -> int:
-    records = bases = enc2 = enc4 = nruns = mask = 0
+    records = bases = enc2 = enc4 = nruns = mask = iupac = 0
     try:
         with open(args.file, "rb") as f:
             for fields, _, _ in fastb.iter_raw(f, read_payload=False):
@@ -274,6 +274,7 @@ def _cmd_info(args) -> int:
                     enc4 += 1
                 nruns += fields.get("NRUNS", "").count(":")
                 mask += fields.get("MASK", "").count(":")
+                iupac += len(fields["IUPAC"].split(",")) if fields.get("IUPAC") else 0
     except ValueError as e:
         print(f"fastb info: {e}", file=sys.stderr)
         return 3
@@ -286,6 +287,7 @@ def _cmd_info(args) -> int:
     print(f"records_2bit\t{enc2}")
     print(f"records_4bit\t{enc4}")
     print(f"n_runs\t{nruns}")
+    print(f"iupac_runs\t{iupac}")
     print(f"mask_runs\t{mask}")
     return 0
 

@@ -1,13 +1,21 @@
 # Changelog
 
-## [3.0.0] - UNRELEASED
+## [3.1.0] - UNRELEASED
 
-First release. Format defined in [FASTB-SPEC.md](FASTB-SPEC.md).
+First release. Writes file format 3.1, reads 3.1 and 3.0. Format defined in
+[FASTB-SPEC.md](FASTB-SPEC.md).
 
 ### Format
 - Every base is stored at 2 bits. N and lowercase positions are run lists in
-  the header (`NRUNS=`, `MASK=`). 4-bit storage is used only for records with
-  IUPAC codes other than N, or gaps.
+  the header (`NRUNS=`, `MASK=`).
+- 3.1: IUPAC ambiguity codes and gaps are an exception list (`IUPAC=`) over
+  the 2-bit core. 4-bit storage is used only when that list would be larger
+  than the bytes 4-bit packing adds. In 3.0 a single ambiguity code put the
+  whole record in 4-bit; on a Pilon-polished 4.66 Mb assembly that was
+  1,755,783 bytes against 1,167,801 now.
+- The magic line is `##FASTB 3.1`. A 3.0 reader refuses a 3.1 file instead of
+  misreading it. 3.0 files stay readable; fixtures for both are in
+  `tests/fixtures/`.
 - Records end with an explicit `BYTES=` count and a newline. No guessing.
 - Plain-text index footer. Jump to record k or to a record by name.
 - Readers ignore header keys they do not know.

@@ -1,15 +1,16 @@
 """FASTB v3 reference implementation.
 
-A FASTB file stores nucleotide sequences packed at 2 bits per base (4 bits
-for records with IUPAC codes other than N). Everything about the sequence
-(magic line, record headers, index) is plain UTF-8 text. See FASTB-SPEC.md
-at the repo root for the normative layout.
+A FASTB file stores nucleotide sequences packed at 2 bits per base, with N,
+ambiguity codes, and lowercase kept as lists in the record header (4 bits
+per base only for records dense in ambiguity codes). Everything about the
+sequence (magic line, record headers, index) is plain UTF-8 text. See
+FASTB-SPEC.md at the repo root for the normative layout.
 
 Layout at a glance:
 
-    ##FASTB 3.0                              <- magic line, byte 0
+    ##FASTB 3.1                              <- magic line, byte 0
     # optional file comments
-    >chr1  LEN=12  ENC=2  ALPHA=D  CRC=...  BYTES=3  NRUNS=...  MASK=...
+    >chr1  LEN=12  ENC=2  ALPHA=D  CRC=...  BYTES=3  NRUNS=...  IUPAC=...  MASK=...
     <3 payload bytes>
     \\n
     >chr2  ...
@@ -27,7 +28,11 @@ import numpy as np
 
 from fastb.alphabet import require_nucleotide
 
-MAGIC_LINE = b"##FASTB 3.0\n"
+# Written by this version. 3.1 added the IUPAC= exception list; a 3.0 reader
+# would ignore that field and print the wrong base, hence the new number.
+MAGIC_LINE = b"##FASTB 3.1\n"
+# 3.0 files (no IUPAC= field, 4-bit for any IUPAC record) decode unchanged.
+READABLE_MAGIC = (b"##FASTB 3.0\n", MAGIC_LINE)
 
 # 2-bit: A=00 C=01 G=10 T/U=11. N packs as 00 and is restored from NRUNS.
 _PACK2 = np.full(256, 255, dtype=np.uint8)
@@ -172,46 +177,130 @@ def _pack(codes: np.ndarray, per_byte: int) -> bytes:
     return packed.astype(np.uint8).tobytes()
 
 
-def encode_sequence(seq, alpha: str) -> Tuple[int, bytes, str, str]:
-    """Pack one sequence. Returns (enc, payload, nruns_field, mask_field).
+# IUPAC exception list: (start, length, letter) runs over the 2-bit core, for
+# symbols that are neither ACGT/U nor N. Header text is "start:length:letter"
+# with start and length in hex, comma separated.
+IupacRun = Tuple[int, int, str]
+_IUPAC_KEY_LEN = len("\tIUPAC=")
+
+
+def _encode_iupac(runs: List[IupacRun]) -> str:
+    return ",".join(f"{s:x}:{l:x}:{c}" for s, l, c in runs)
+
+
+def _decode_iupac(s: str) -> List[IupacRun]:
+    if not s:
+        return []
+    out = []
+    for p in s.split(","):
+        a, b, c = p.split(":", 2)
+        out.append((int(a, 16), int(b, 16), c))
+    return out
+
+
+def _merge_iupac(runs: List[IupacRun]) -> List[IupacRun]:
+    """Join same-letter runs that touch, so the header does not depend on CHUNK_BASES."""
+    out: List[IupacRun] = []
+    for s, l, c in runs:
+        if out and out[-1][2] == c and out[-1][0] + out[-1][1] == s:
+            out[-1] = (out[-1][0], out[-1][1] + l, c)
+        else:
+            out.append((s, l, c))
+    return out
+
+
+def _iupac_bounds(runs: List[IupacRun]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """IUPAC runs -> sorted (starts, ends, letter codes) arrays for searchsorted lookups."""
+    if not runs:
+        z = np.zeros(0, dtype=np.int64)
+        return z, z, np.zeros(0, dtype=np.uint8)
+    starts = np.array([r[0] for r in runs], dtype=np.int64)
+    lens = np.array([r[1] for r in runs], dtype=np.int64)
+    letters = np.frombuffer("".join(r[2] for r in runs).encode("ascii"), dtype=np.uint8)
+    return starts, starts + lens, letters
+
+
+def _exception_runs(up: np.ndarray, codes: np.ndarray, offset: int, alpha: str) -> List[IupacRun]:
+    """Runs of symbols the 2-bit table cannot spell. Sets their codes to 0 in place."""
+    bad = np.flatnonzero(codes == 255)
+    if not len(bad):
+        return []
+    letters = up[bad]
+    illegal = np.take(_PACK4, letters) == 255
+    if illegal.any():
+        raise ValueError(f"illegal symbol {chr(int(letters[illegal][0]))!r} for ALPHA={alpha}")
+    letters = np.where(letters == ord("."), ord("-"), letters).astype(np.uint8)
+    brk = np.flatnonzero((np.diff(bad) != 1) | (np.diff(letters) != 0)) + 1
+    first = np.concatenate(([0], brk))
+    last = np.concatenate((brk - 1, [len(bad) - 1]))
+    codes[bad] = 0
+    return [(int(s) + offset, int(e - s) + 1, chr(c))
+            for s, e, c in zip(bad[first], bad[last], letters[first])]
+
+
+def encode_sequence(seq, alpha: str) -> Tuple[int, bytes, str, str, str]:
+    """Pack one sequence. Returns (enc, payload, nruns_field, mask_field, iupac_field).
 
     Works in CHUNK_BASES pieces so temporaries stay a few tens of MB
-    regardless of record length. A record falls back to 4-bit when any
-    chunk holds a symbol outside ACGT/U/N; the 2-bit pieces already packed
-    are discarded and the record is re-encoded from the start.
+    regardless of record length.
+
+    Every base is packed at 2 bits. N goes to the NRUNS list and any other
+    IUPAC code or gap goes to the IUPAC list. The record is written at 4 bits
+    instead only when the IUPAC header text would be longer than the bytes
+    that 4-bit packing adds (see FASTB-SPEC.md, "Choosing ENC").
     """
     raw = np.frombuffer(seq.encode("ascii") if isinstance(seq, str) else seq, dtype=np.uint8)
     n = len(raw)
-    for enc, table, per_byte in ((2, _PACK2, 4), (4, _PACK4, 2)):
-        pieces, mask, nruns = [], [], []
-        for i in range(0, n, CHUNK_BASES):
-            r = raw[i:i + CHUNK_BASES]
-            up = np.take(_UPPER, r)
-            mask += [(s + i, l) for s, l in _runs(r != up)]
-            codes = np.take(table, up)
-            if (codes == 255).any():
-                if enc == 4:
-                    bad = chr(int(up[codes == 255][0]))
-                    raise ValueError(f"illegal symbol {bad!r} for ALPHA={alpha}")
-                break
-            if enc == 2:
-                nruns += [(s + i, l) for s, l in _runs(up == ord("N"))]
-            pieces.append(_pack(codes, per_byte))
-        else:
-            return (enc, b"".join(pieces),
-                    _encode_runs(_merge_runs(nruns)), _encode_runs(_merge_runs(mask)))
-    raise AssertionError("unreachable")
+    extra4 = -(-n // 2) - -(-n // 4)   # bytes that 4-bit packing costs over 2-bit
+
+    pieces, mask, nruns, iupac = [], [], [], []
+    dense = False
+    for k, i in enumerate(range(0, n, CHUNK_BASES)):
+        r = raw[i:i + CHUNK_BASES]
+        up = np.take(_UPPER, r)
+        mask += [(s + i, l) for s, l in _runs(r != up)]
+        codes = np.take(_PACK2, up)
+        iupac += _exception_runs(up, codes, i, alpha)
+        # Lower bound on the final header text: each entry is at least 6 bytes
+        # with its comma, and merging across chunk edges removes at most one
+        # entry per chunk. Stop early once 4-bit is certain to win.
+        floor_entries = len(iupac) - k
+        if floor_entries > 0 and _IUPAC_KEY_LEN + floor_entries * 6 - 1 > extra4:
+            dense = True
+            break
+        nruns += [(s + i, l) for s, l in _runs(up == ord("N"))]
+        pieces.append(_pack(codes, 4))
+
+    if not dense:
+        text = _encode_iupac(_merge_iupac(iupac))
+        if not text or _IUPAC_KEY_LEN + len(text) <= extra4:
+            return (2, b"".join(pieces), _encode_runs(_merge_runs(nruns)),
+                    _encode_runs(_merge_runs(mask)), text)
+
+    # 4-bit: every symbol has its own code, so no N or IUPAC lists are needed.
+    pieces, mask = [], []
+    for i in range(0, n, CHUNK_BASES):
+        r = raw[i:i + CHUNK_BASES]
+        up = np.take(_UPPER, r)
+        mask += [(s + i, l) for s, l in _runs(r != up)]
+        codes = np.take(_PACK4, up)
+        if (codes == 255).any():
+            raise ValueError(f"illegal symbol {chr(int(up[codes == 255][0]))!r} for ALPHA={alpha}")
+        pieces.append(_pack(codes, 2))
+    return 4, b"".join(pieces), "", _encode_runs(_merge_runs(mask)), ""
 
 
 def decode_chunk(payload: bytes, enc: int, alpha: str, base: int, length: int,
                  nruns: Tuple[np.ndarray, np.ndarray],
-                 mask: Tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+                 mask: Tuple[np.ndarray, np.ndarray],
+                 iupac: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None) -> np.ndarray:
     """Unpack one payload slice to ASCII. Pure function, safe in any process.
 
     base: position of the first base of this slice within the record.
     length: bases to produce (trims the padding of the last byte).
-    nruns, mask: (starts, ends) arrays for the whole record; only runs that
-    overlap [base, base + length) are applied.
+    nruns, mask: (starts, ends) arrays; iupac: (starts, ends, letter codes).
+    Only runs that overlap [base, base + length) are applied, in the order
+    N, IUPAC, lowercase.
     """
     lut2, lut4 = _UNPACK[alpha]
     b = np.frombuffer(payload, dtype=np.uint8)
@@ -223,22 +312,31 @@ def decode_chunk(payload: bytes, enc: int, alpha: str, base: int, length: int,
         raise ValueError(f"Unknown ENC={enc}")
     out = out[:length]
     end = base + length
-    for (starts, ends), value, orr in ((nruns, ord("N"), False), (mask, 0x20, True)):
+
+    def overlapping(starts, ends):
         lo = np.searchsorted(ends, base, side="right")
         hi = np.searchsorted(starts, end, side="left")
-        for s, e in zip(starts[lo:hi].tolist(), ends[lo:hi].tolist()):
-            a, z = max(s - base, 0), min(e - base, length)
-            if orr:
-                out[a:z] |= value
-            else:
-                out[a:z] = value
+        return lo, hi
+
+    lo, hi = overlapping(*nruns)
+    for s, e in zip(nruns[0][lo:hi].tolist(), nruns[1][lo:hi].tolist()):
+        out[max(s - base, 0):min(e - base, length)] = ord("N")
+    if iupac is not None and len(iupac[0]):
+        lo, hi = overlapping(iupac[0], iupac[1])
+        for s, e, c in zip(iupac[0][lo:hi].tolist(), iupac[1][lo:hi].tolist(), iupac[2][lo:hi].tolist()):
+            out[max(s - base, 0):min(e - base, length)] = c
+    lo, hi = overlapping(*mask)
+    for s, e in zip(mask[0][lo:hi].tolist(), mask[1][lo:hi].tolist()):
+        out[max(s - base, 0):min(e - base, length)] |= 0x20
     return out
 
 
 def decode_sequence(payload: bytes, length: int, enc: int, alpha: str,
-                    nruns: List[Tuple[int, int]], mask: List[Tuple[int, int]]) -> str:
+                    nruns: List[Tuple[int, int]], mask: List[Tuple[int, int]],
+                    iupac: Optional[List[IupacRun]] = None) -> str:
     """Unpack one whole payload back to a sequence string."""
-    out = decode_chunk(payload, enc, alpha, 0, length, _run_bounds(nruns), _run_bounds(mask))
+    out = decode_chunk(payload, enc, alpha, 0, length, _run_bounds(nruns), _run_bounds(mask),
+                       _iupac_bounds(iupac or []))
     return out.tobytes().decode("ascii")
 
 
@@ -262,7 +360,7 @@ def write_file(records: Iterable[Record], out, file_comment: Optional[str] = Non
 
     for rec in records:
         require_nucleotide(rec.sequence, rec.alpha, rec.name, force_nucleotide)
-        enc, payload, nruns, mask = encode_sequence(rec.sequence, rec.alpha)
+        enc, payload, nruns, mask, iupac = encode_sequence(rec.sequence, rec.alpha)
         crc = zlib.crc32(payload) & 0xFFFFFFFF
 
         if rec.comment:
@@ -277,6 +375,8 @@ def write_file(records: Iterable[Record], out, file_comment: Optional[str] = Non
         )
         if nruns:
             header += f"\tNRUNS={nruns}"
+        if iupac:
+            header += f"\tIUPAC={iupac}"
         if mask:
             header += f"\tMASK={mask}"
         out.write(header.encode("utf-8") + b"\n")
@@ -332,6 +432,7 @@ def _record_from_fields(fields: Dict[str, str], payload: bytes,
     seq = decode_sequence(
         payload, int(fields["LEN"]), int(fields["ENC"]), alpha,
         _decode_runs(fields.get("NRUNS", "")), _decode_runs(fields.get("MASK", "")),
+        _decode_iupac(fields.get("IUPAC", "")),
     )
     return Record(name=name, sequence=seq, alpha=alpha, comment=comment)
 
@@ -343,8 +444,10 @@ def iter_raw(src, read_payload: bool = True) -> Iterator[Tuple[Dict[str, str], b
     yielded in its place; the CRC is not checked.
     """
     magic = src.readline()
-    if magic != MAGIC_LINE:
-        raise ValueError(f"Not a FASTB v3 file. Expected magic {MAGIC_LINE!r}, got {magic!r}")
+    if magic not in READABLE_MAGIC:
+        raise ValueError(
+            f"Not a FASTB file this reader supports. Expected one of "
+            f"{[m.decode().strip() for m in READABLE_MAGIC]}, got {magic!r}")
 
     pending_comment: Optional[str] = None
     while True:

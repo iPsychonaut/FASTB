@@ -48,7 +48,7 @@ def test_encode_produces_valid_file(small_fasta, tmp_path):
     assert result.returncode == 0
     with open(fb, "rb") as f:
         magic = f.read(12)
-    assert magic == b"##FASTB 3.0\n"
+    assert magic == b"##FASTB 3.1\n"
 
 
 def test_encode_protein_fasta_exits_4(tmp_path):
@@ -138,4 +138,4 @@ def test_verify_truncated_file_exits_3(small_fastb, tmp_path):
 
 def test_version():
     result = run("--version")
-    assert "3.0.0" in result.stdout + result.stderr
+    assert "3.1.0" in result.stdout + result.stderr
