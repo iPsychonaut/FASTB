@@ -120,33 +120,33 @@ cluster.
 
 k3d cluster on the machine above, one pod per sample at 7 CPUs and 24Gi, the
 pigz and FASTB variants side by side. Images `egap:old` and `egap:fastb`
-(EGAP at ad04ff6, FASTB 3.1.0); the FASTB Job sets
+(EGAP at 543be05, FASTB 3.1.0); the FASTB Job sets
 `EGAP_INTERMEDIATE_FORMAT=fastb`. Each pod undoes any compression in the
 sample folder, then times `final_compress.py` alone and prints one
 `COMPRESS_SUMMARY` line (EGAP `tests/ab/ab-test.yaml`). File sizes from
-`find -printf '%s'`. Both Jobs completed 3 of 3 samples in 3 h 3 min.
+`find -printf '%s'`. Both Jobs completed 3 of 3 samples (3 h 37 min pigz,
+3 h 44 min FASTB) with every assembler running, Flye included.
 
 | Sample | Measure | pigz | FASTB 3.1 |
 |---|---|---|---|
 | Illumina | Final assembly | 1,443,530 B | 1,160,593 B |
-| | All compressed FASTA | 63,193,455 B | 58,200,154 B |
-| | Sample folder after | 3,011,840,653 B | 3,006,904,208 B |
-| | `final_compress` time | 12.5 s | 28.0 s |
-| Hybrid | Final assembly | 1,452,159 B | 1,168,574 B |
-| | All compressed FASTA | 33,155,476 B | 30,402,688 B |
-| | Sample folder after | 2,980,836,032 B | 2,980,164,971 B |
-| | `final_compress` time | 8.9 s | 18.8 s |
-| PacBio | Final assembly | 1,706,445 B | 1,372,439 B |
-| | All compressed FASTA | 28,579,887 B | 26,327,405 B |
-| | Sample folder after | 911,262,458 B | 909,010,606 B |
-| | `final_compress` time | 4.2 s | 9.4 s |
-| All three | Compressed FASTA | 124,928,818 B | 114,930,247 B |
-| | `final_compress` time | 25.6 s | 56.2 s |
+| | All compressed FASTA | 63,193,972 B | 58,200,090 B |
+| | `final_compress` time | 12.1 s | 29.0 s |
+| Hybrid | Final assembly | 1,451,758 B | 1,168,250 B |
+| | All compressed FASTA | 44,132,949 B | 40,264,419 B |
+| | `final_compress` time | 14.3 s | 20.4 s |
+| PacBio | Final assembly | 1,695,559 B | 1,364,249 B |
+| | All compressed FASTA | 49,647,840 B | 44,498,569 B |
+| | `final_compress` time | 6.2 s | 15.7 s |
+| All three | Compressed FASTA | 156,974,761 B | 142,963,078 B |
+| | `final_compress` time | 32.6 s | 65.2 s |
 
-FASTB wrote 37 files, all at 2 bits per base; 7 carry an IUPAC list. The
-assemblies have the same size, contig count, and N50 in both variants for
-the Illumina and PacBio samples, and 17 contigs with N50 465 kb for the
-hybrid in both.
+FASTB wrote 57 files, all at 2 bits per base; 8 carry an IUPAC list. The
+assemblies have the same size, contig count, and N50 in both variants
+(Illumina 4.64 Mb in 1 contig; hybrid 4.66 Mb, 17 contigs, N50 465 kb;
+PacBio 5.46 Mb, 3 contigs, N50 2.94 Mb). Sample folders after compression
+differ by up to 17 MB between variants, all of it in MaSuRCA's working
+files, which vary run to run.
 
 ### WSL run, format 3.0 then 3.1
 
