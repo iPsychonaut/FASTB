@@ -112,12 +112,49 @@ What the numbers say:
 ## Inside EGAP
 
 Three E. coli samples (ONT + Illumina hybrid, Illumina with a reference,
-PacBio) run end to end through EGAP with `--intermediate_format pigz` and
-then `fastb`. Same machine as above, 16 threads, 48 GB, each arm with its own
-fresh input and output folders, disk use sampled every 30 s with `du -sb`.
-The fastb arm ran format 3.0; the 3.1 column re-encodes that arm's 54
-`.fastb` files afterwards (`fastb cat -w 0 x.fastb | fastb encode`), with
-every round trip checked by `cmp`.
+PacBio) run end to end through [EGAP](https://github.com/iPsychonaut/EGAP)
+with pigz and with FASTB, twice: once in WSL and once on a local Kubernetes
+cluster.
+
+### Cluster run, format 3.1
+
+k3d cluster on the machine above, one pod per sample at 7 CPUs and 24Gi, the
+pigz and FASTB variants side by side. Images `egap:old` and `egap:fastb`
+(EGAP at ad04ff6, FASTB 3.1.0); the FASTB Job sets
+`EGAP_INTERMEDIATE_FORMAT=fastb`. Each pod undoes any compression in the
+sample folder, then times `final_compress.py` alone and prints one
+`COMPRESS_SUMMARY` line (EGAP `tests/ab/ab-test.yaml`). File sizes from
+`find -printf '%s'`. Both Jobs completed 3 of 3 samples in 3 h 3 min.
+
+| Sample | Measure | pigz | FASTB 3.1 |
+|---|---|---|---|
+| Illumina | Final assembly | 1,443,530 B | 1,160,593 B |
+| | All compressed FASTA | 63,193,455 B | 58,200,154 B |
+| | Sample folder after | 3,011,840,653 B | 3,006,904,208 B |
+| | `final_compress` time | 12.5 s | 28.0 s |
+| Hybrid | Final assembly | 1,452,159 B | 1,168,574 B |
+| | All compressed FASTA | 33,155,476 B | 30,402,688 B |
+| | Sample folder after | 2,980,836,032 B | 2,980,164,971 B |
+| | `final_compress` time | 8.9 s | 18.8 s |
+| PacBio | Final assembly | 1,706,445 B | 1,372,439 B |
+| | All compressed FASTA | 28,579,887 B | 26,327,405 B |
+| | Sample folder after | 911,262,458 B | 909,010,606 B |
+| | `final_compress` time | 4.2 s | 9.4 s |
+| All three | Compressed FASTA | 124,928,818 B | 114,930,247 B |
+| | `final_compress` time | 25.6 s | 56.2 s |
+
+FASTB wrote 37 files, all at 2 bits per base; 7 carry an IUPAC list. The
+assemblies have the same size, contig count, and N50 in both variants for
+the Illumina and PacBio samples, and 17 contigs with N50 465 kb for the
+hybrid in both.
+
+### WSL run, format 3.0 then 3.1
+
+Same machine, 16 threads, 48 GB, `--intermediate_format pigz` then `fastb`,
+each arm with its own fresh input and output folders, disk use sampled every
+30 s with `du -sb`. The FASTB arm ran format 3.0; the 3.1 column re-encodes
+that arm's 54 `.fastb` files afterwards (`fastb cat -w 0 x.fastb | fastb
+encode`), with every round trip checked by `cmp`.
 
 | | pigz | fastb 3.0 | fastb 3.1 |
 |---|---|---|---|
@@ -127,11 +164,17 @@ every round trip checked by `cmp`.
 | The 54 files FASTB encodes | 79,692,469 B | 70,243,637 B | 66,109,033 B |
 | Hybrid final assembly (4.66 Mb, 6 IUPAC bases) | 1,452,135 B | 1,755,783 B | 1,167,801 B |
 
-What the numbers say:
+### What the numbers say
 
-- FASTB costs EGAP no time and saves about 10% of its FASTA bytes. On a 5 Mb
-  genome that is about 14 MB out of 23 GB, because FASTA is under 1% of what
-  EGAP writes; reads, VCF, and GFF files are the rest.
+- Each final assembly is about 20% smaller as FASTB 3.1 than as pigz -6
+  (19.5 to 19.6% in all three cluster samples).
+- Across all of a run's FASTA files the saving is about 8%, because about
+  half of them stay on pigz (see below). On a 5 Mb genome that is 10 MB out
+  of several GB: reads, VCF, and GFF files are most of what EGAP writes.
+- FASTB's compression step takes about twice as long as pigz here: 56 s
+  against 26 s over three samples. Each file is decoded and compared with
+  the original before the original is deleted, and Python starts twice per
+  file. Total run time did not change measurably (6,843 s against 6,852 s).
 - On the files it encodes, FASTB 3.1 is 17% smaller than pigz -6.
 - Format 3.0 was larger than pigz on every Pilon-polished assembly: 6
   ambiguity codes put 3 of 17 contigs in 4-bit. That is why 3.1 has the
