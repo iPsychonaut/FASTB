@@ -168,13 +168,15 @@ encode`), with every round trip checked by `cmp`.
 
 - Each final assembly is about 20% smaller as FASTB 3.1 than as pigz -6
   (19.5 to 19.6% in all three cluster samples).
-- Across all of a run's FASTA files the saving is about 8%, because about
-  half of them stay on pigz (see below). On a 5 Mb genome that is 10 MB out
+- Across all of a run's FASTA files the saving is about 9%, because about
+  half of them stay on pigz (see below). On a 5 Mb genome that is 14 MB out
   of several GB: reads, VCF, and GFF files are most of what EGAP writes.
-- FASTB's compression step takes about twice as long as pigz here: 56 s
-  against 26 s over three samples. Each file is decoded and compared with
+- FASTB's compression step takes about twice as long as pigz here: 65 s
+  against 33 s over three samples. Each file is decoded and compared with
   the original before the original is deleted, and Python starts twice per
-  file. Total run time did not change measurably (6,843 s against 6,852 s).
+  file. Total run time did not change measurably (6,843 s against 6,852 s
+  in WSL; 3 h 44 min against 3 h 37 min in the cluster, where pods share
+  the host).
 - On the files it encodes, FASTB 3.1 is 17% smaller than pigz -6.
 - Format 3.0 was larger than pigz on every Pilon-polished assembly: 6
   ambiguity codes put 3 of 17 contigs in 4-bit. That is why 3.1 has the
