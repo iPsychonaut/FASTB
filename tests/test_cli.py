@@ -51,6 +51,29 @@ def test_encode_produces_valid_file(small_fasta, tmp_path):
     assert magic == b"##FASTB 3.1\n"
 
 
+def test_encode_verify_passes_on_lossless_input(small_fasta, tmp_path):
+    fb = str(tmp_path / "out.fastb")
+    result = run("encode", small_fasta, "-o", fb, "--verify")
+    assert result.returncode == 0, result.stderr
+    assert os.path.exists(fb)
+
+
+@pytest.mark.parametrize("text", [
+    ">chr1 length=8 cov=30x\nACGTACGT\n",   # description is dropped by the format
+    ">chr1\r\nACGTacgt\r\n",                # CRLF input still round-trips
+])
+def test_encode_verify_reports_dropped_description(tmp_path, text):
+    fa = tmp_path / "in.fasta"
+    fa.write_bytes(text.encode())
+    fb = str(tmp_path / "out.fastb")
+    result = run("encode", str(fa), "-o", fb, "--verify")
+    if "length=" in text:
+        assert result.returncode == 3
+        assert "header" in result.stderr and not os.path.exists(fb)
+    else:
+        assert result.returncode == 0, result.stderr
+
+
 def test_encode_protein_fasta_exits_4(tmp_path):
     fa = tmp_path / "protein.fasta"
     fa.write_text(">silk\nMKWVTFISLLLLFSSAYSRGVFRRDTHKSEIAHR\n")

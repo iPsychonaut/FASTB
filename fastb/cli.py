@@ -8,10 +8,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from itertools import zip_longest
+from typing import Optional
 
 import fastb
 from fastb.alphabet import AlphabetError
-from fastb.io import iter_fasta, iter_records, stream_fasta, write_records, wrap_bytes
+from fastb.io import (iter_fasta, iter_records, open_text_or_gz, stream_fasta, write_records,
+                      wrap_bytes)
 
 
 def _out():
@@ -189,7 +192,40 @@ def _add_encode_parser(sub):
     p.add_argument("--comment", metavar="TEXT", help="Optional file-level comment.")
     p.add_argument("--force-nucleotide", action="store_true",
                    help="Skip the protein heuristic. Never bypasses the hard F/I/L/P/Q/E/Z reject.")
+    p.add_argument("--verify", action="store_true",
+                   help="After writing, decode the output and compare it with the input record by "
+                        "record (full header line and sequence). On any difference, including a "
+                        "dropped header description, remove the output and exit 3.")
     p.set_defaults(func=_cmd_encode)
+
+
+def _fasta_lines(path: str):
+    """Yield (header, sequence) bytes per record, header without '>' and with its description."""
+    header, parts = None, []
+    with open_text_or_gz(path) as f:
+        for line in f:
+            line = line.rstrip(b"\r\n")
+            if line.startswith(b">"):
+                if header is not None:
+                    yield header, b"".join(parts)
+                header, parts = line[1:], []
+            elif line:
+                parts.append(line)
+    if header is not None:
+        yield header, b"".join(parts)
+
+
+def _first_difference(fasta_path: str, fastb_path: str) -> Optional[str]:
+    """Return what differs between the FASTA and the written FASTB, or None if nothing does."""
+    pairs = zip_longest(_fasta_lines(fasta_path), iter_records(fastb_path))
+    for i, (a, b) in enumerate(pairs, 1):
+        if a is None or b is None:
+            return f"record counts differ at record {i}"
+        if a[0] != b[0].encode("utf-8"):
+            return f"record {i}: header '{a[0].decode('utf-8', 'replace')}' became '{b[0]}'"
+        if a[1] != b[1].encode("ascii"):
+            return f"record {i} ({b[0]}): sequence differs"
+    return None
 
 
 def _cmd_encode(args) -> int:
@@ -204,6 +240,12 @@ def _cmd_encode(args) -> int:
     except (OSError, ValueError, UnicodeDecodeError) as e:
         print(f"fastb encode: {e}", file=sys.stderr)
         return 1
+    if args.verify:
+        diff = _first_difference(args.file, out_path)
+        if diff:
+            os.remove(out_path)
+            print(f"fastb encode: verify failed, {diff}; {out_path} removed", file=sys.stderr)
+            return 3
     print(f"Encoded {n} record(s) -> {out_path}", file=sys.stderr)
     return 0
 
