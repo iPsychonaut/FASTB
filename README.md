@@ -169,7 +169,9 @@ Final assembly 19.0% smaller, all FASTA 10.0% smaller, compression step
 headers with descriptions go to pigz). With all 41 files sent to one
 `fastb encode` process (EGAP c669617, FASTB 3d0a65a) instead of one
 process per file, the same step re-timed on the same folder took 21.3 s,
-1.02x pigz; per file, Python start-up had been 70% of FASTB's cost.
+1.02x pigz; per file, Python start-up had been 70% of FASTB's cost. With
+one process per CPU, each on its own chunk of files (EGAP fd64e6a), it
+took 16.9 s, 0.81x pigz. Same outputs each time.
 
 ### WSL run, format 3.0 then 3.1
 
