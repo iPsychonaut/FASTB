@@ -25,7 +25,7 @@ Requires Python 3.8 or newer and numpy.
 
 | Command | What it does |
 |---|---|
-| `fastb encode in.fasta [-o out.fastb] [--verify]` | FASTA to FASTB. Accepts `.fasta`, `.fa`, `.fna`, and any of those with `.gz`. `--verify` re-reads the output and compares every header line and sequence with the input; on a difference it removes the output and exits 3. |
+| `fastb encode in.fasta [in2.fasta ...] [-o out.fastb] [--append] [--verify]` | FASTA to FASTB. Accepts `.fasta`, `.fa`, `.fna`, and any of those with `.gz`. Several inputs are encoded in one process, each on its own; a failed file leaves no output and the exit code is the highest per-file code. `--append` names outputs `<input>.fastb`. `--verify` re-reads each output and compares every header line and sequence with the input; on a difference it removes that output and exits 3. |
 | `fastb decode in.fastb [-o out.fasta]` | FASTB to FASTA, 80 columns (`-w 0` for one line per record). |
 | `fastb cat in.fastb` | FASTA to stdout. For pipes and process substitution. |
 | `fastb head in.fastb [-n 5]` | First N records as FASTA. |

@@ -185,10 +185,17 @@ def _cmd_extract(args) -> int:
 # ---------------------------------------------------------------------------
 
 def _add_encode_parser(sub):
-    p = sub.add_parser("encode", help="Convert FASTA (.fasta, .fa, .fna, or .gz) to FASTB.")
-    p.add_argument("file", metavar="file.fasta")
+    p = sub.add_parser("encode", help="Convert FASTA (.fasta, .fa, .fna, or .gz) to FASTB. "
+                                      "Several files are encoded in one process, each on its own: "
+                                      "a failed file leaves no output and the exit code is the "
+                                      "highest per-file code.")
+    p.add_argument("files", nargs="+", metavar="file.fasta")
     p.add_argument("-o", "--output", metavar="PATH",
-                   help="Output path (default: input with the extension replaced by .fastb).")
+                   help="Output path, one input only (default: input with the extension "
+                        "replaced by .fastb).")
+    p.add_argument("--append", action="store_true",
+                   help="Name each output <input>.fastb, keeping the input's extension, so "
+                        "x.fa and x.fasta cannot collide.")
     p.add_argument("--comment", metavar="TEXT", help="Optional file-level comment.")
     p.add_argument("--force-nucleotide", action="store_true",
                    help="Skip the protein heuristic. Never bypasses the hard F/I/L/P/Q/E/Z reject.")
@@ -228,26 +235,42 @@ def _first_difference(fasta_path: str, fastb_path: str) -> Optional[str]:
     return None
 
 
-def _cmd_encode(args) -> int:
-    out_path = args.output or _strip_ext(
-        _strip_ext(args.file, (".gz",)), (".fasta", ".fa", ".fna")) + ".fastb"
+def _encode_one(in_path: str, out_path: str, args) -> int:
     try:
-        n = write_records(out_path, iter_fasta(args.file, as_bytes=True), file_comment=args.comment,
+        n = write_records(out_path, iter_fasta(in_path, as_bytes=True), file_comment=args.comment,
                           force_nucleotide=args.force_nucleotide)
     except AlphabetError as e:
-        print(f"fastb encode: {e}", file=sys.stderr)
+        print(f"fastb encode: {in_path}: {e}", file=sys.stderr)
         return 4
     except (OSError, ValueError, UnicodeDecodeError) as e:
-        print(f"fastb encode: {e}", file=sys.stderr)
+        print(f"fastb encode: {in_path}: {e}", file=sys.stderr)
         return 1
     if args.verify:
-        diff = _first_difference(args.file, out_path)
+        diff = _first_difference(in_path, out_path)
         if diff:
             os.remove(out_path)
-            print(f"fastb encode: verify failed, {diff}; {out_path} removed", file=sys.stderr)
+            print(f"fastb encode: {in_path}: verify failed, {diff}; {out_path} removed",
+                  file=sys.stderr)
             return 3
     print(f"Encoded {n} record(s) -> {out_path}", file=sys.stderr)
     return 0
+
+
+def _cmd_encode(args) -> int:
+    if args.output and (len(args.files) > 1 or args.append):
+        print("fastb encode: -o takes one input and cannot be combined with --append",
+              file=sys.stderr)
+        return 1
+    rc = 0
+    for in_path in args.files:
+        if args.output:
+            out_path = args.output
+        elif args.append:
+            out_path = in_path + ".fastb"
+        else:
+            out_path = _strip_ext(_strip_ext(in_path, (".gz",)), (".fasta", ".fa", ".fna")) + ".fastb"
+        rc = max(rc, _encode_one(in_path, out_path, args))
+    return rc
 
 
 def _add_decode_parser(sub):

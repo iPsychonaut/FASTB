@@ -74,6 +74,27 @@ def test_encode_verify_reports_dropped_description(tmp_path, text):
         assert result.returncode == 0, result.stderr
 
 
+def test_encode_many_files_in_one_process(small_fasta, tmp_path):
+    """Three inputs, one process: a good file, a protein file, a file with a header
+    description. Each is handled on its own; failures leave no output; the exit code
+    is the highest per-file code; --append keeps the input extension."""
+    good = tmp_path / "good.fa"
+    good.write_text(open(small_fasta).read())
+    prot = tmp_path / "prot.fasta"
+    prot.write_text(">p\nMKWVTFISLLLLFSSAYSRGVFRRDTHKSEIAHR\n")
+    desc = tmp_path / "desc.fasta"
+    desc.write_text(">c1 length=8\nACGTACGT\n")
+    result = run("encode", "--append", "--verify", str(good), str(prot), str(desc))
+    assert result.returncode == 4, result.stderr
+    assert os.path.exists(str(good) + ".fastb")
+    assert not os.path.exists(str(prot) + ".fastb")
+    assert not os.path.exists(str(desc) + ".fastb")
+    assert result.stderr.count("Encoded") == 1
+    # -o is for one input only
+    result = run("encode", str(good), str(desc), "-o", str(tmp_path / "x.fastb"))
+    assert result.returncode == 1 and "-o takes one input" in result.stderr
+
+
 def test_encode_protein_fasta_exits_4(tmp_path):
     fa = tmp_path / "protein.fasta"
     fa.write_text(">silk\nMKWVTFISLLLLFSSAYSRGVFRRDTHKSEIAHR\n")
