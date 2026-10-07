@@ -166,7 +166,10 @@ finished in 119 min with the same final assembly: 3 contigs, 5,013,404 bp.
 
 Final assembly 19.0% smaller, all FASTA 10.0% smaller, compression step
 1.5x pigz's time. 23 `.fastb` files and 18 `.fasta.gz` (protein and
-headers with descriptions go to pigz).
+headers with descriptions go to pigz). With all 41 files sent to one
+`fastb encode` process (EGAP c669617, FASTB 3d0a65a) instead of one
+process per file, the same step re-timed on the same folder took 21.3 s,
+1.02x pigz; per file, Python start-up had been 70% of FASTB's cost.
 
 ### WSL run, format 3.0 then 3.1
 
