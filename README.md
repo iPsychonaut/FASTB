@@ -148,6 +148,26 @@ PacBio 5.46 Mb, 3 contigs, N50 2.94 Mb). Sample folders after compression
 differ by up to 17 MB between variants, all of it in MaSuRCA's working
 files, which vary run to run.
 
+### Hybrid sample, third run
+
+Same cluster and limits, hybrid sample only, EGAP at 51ef6bf and FASTB at
+c349a91. Two things changed since the table above: the Illumina reads now
+come from the same isolate as the ONT reads (SRR15116275 for SRR32405433;
+the earlier run paired an unrelated isolate, which was why the hybrid
+assembly had 17 contigs), and `fastb_compress` verifies the round trip
+inside `fastb encode --verify` instead of a second process. Both variants
+finished in 119 min with the same final assembly: 3 contigs, 5,013,404 bp.
+
+| Hybrid, third run | pigz | FASTB 3.1 |
+|---|---|---|
+| Final assembly | 1,547,551 B | 1,253,877 B |
+| All compressed FASTA | 58,848,086 B | 52,984,248 B |
+| `final_compress` time | 20.9 s | 31.4 s |
+
+Final assembly 19.0% smaller, all FASTA 10.0% smaller, compression step
+1.5x pigz's time. 23 `.fastb` files and 18 `.fasta.gz` (protein and
+headers with descriptions go to pigz).
+
 ### WSL run, format 3.0 then 3.1
 
 Same machine, 16 threads, 48 GB, `--intermediate_format pigz` then `fastb`,
