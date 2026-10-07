@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.1.0] - UNRELEASED
+## [3.1.0] - 2026-10-07
 
 First release. Writes file format 3.1, reads 3.1 and 3.0. Format defined in
 [FASTB-SPEC.md](FASTB-SPEC.md).
@@ -25,6 +25,12 @@ First release. Writes file format 3.1, reads 3.1 and 3.0. Format defined in
   is bounded per chunk, not per record.
 - `fastb cat -p N` and `fastb decode -p N` decode chunks in N processes.
 - `fastb` CLI: view, head, stats, extract, encode, decode, verify.
+- `fastb encode --verify` re-reads the written file and compares every
+  header line and sequence with the input; on a difference it removes the
+  output and exits 3. A dropped header description counts as a difference.
+- `fastb encode` takes several files in one process, each encoded and
+  verified on its own; `--append` names outputs `<input>.fastb`; the exit
+  code is the highest per-file code.
 - Alphabet checks reject protein FASTA with exit code 4.
 - Byte-exact fixtures in `tests/fixtures/`.
 
