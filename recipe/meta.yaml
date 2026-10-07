@@ -7,7 +7,7 @@ package:
 
 source:
   url: https://github.com/iPsychonaut/FASTB/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000  # fill in after tagging v{{ version }}
+  sha256: af99053aac98083247032c244b8b797055eda66b47500595b1175f38663fa521
 
 build:
   noarch: python
