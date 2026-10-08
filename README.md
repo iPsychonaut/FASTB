@@ -171,7 +171,10 @@ headers with descriptions go to pigz). With all 41 files sent to one
 process per file, the same step re-timed on the same folder took 21.3 s,
 1.02x pigz; per file, Python start-up had been 70% of FASTB's cost. With
 one process per CPU, each on its own chunk of files (EGAP fd64e6a), it
-took 16.9 s, 0.81x pigz. Same outputs each time.
+took 16.9 s, 0.81x pigz; with fastb imported into EGAP's Python and the
+workers forked from it, no start-up at all (EGAP 789965e), 16.5 s. Same
+outputs each time. What remains of the step is pigz on the FASTQ and
+fallback files.
 
 ### WSL run, format 3.0 then 3.1
 
