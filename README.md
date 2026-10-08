@@ -2,154 +2,225 @@
   <img src="resources/FASTB_banner.png" alt="FASTB Banner" width="1000">
 </div>
 
-# FASTB — Binary Nucleotide Encoding (v2.1)
+# FASTB
 
-**FASTB** is a binary file format for storing nucleotide sequence data from FASTA in a more **size-efficient** and **CPU-friendly** way.  
+A 2-bit binary format for DNA and RNA. Smaller than gzipped FASTA, faster to
+read, and no compression step. Built to replace `pigz` on the FASTA
+intermediate files that [EGAP](https://github.com/iPsychonaut/EGAP) writes.
 
-Instead of encoding nucleotides as ASCII characters (8-bits each), FASTB stores them in compact 2-bit, 3-bit, or 4-bit encodings depending on the sequence complexity.  
+Format definition: [FASTB-SPEC.md](FASTB-SPEC.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
----
+## Install
 
-## Why FASTB Matters
+```bash
+pip install fastb
+```
 
-FASTA files are simple and human-readable, but they are **inefficient** for computational workflows:
+From a checkout, `pip install -e .[dev]` adds pytest. `pip install fastb[bench]`
+adds psutil for the benchmark script. A Bioconda recipe is in `recipe/`.
 
-- **High storage overhead**: Each base takes 8 bits in ASCII, even though only 4–16 symbols are used.
-- **CPU waste**: Every FASTA compression and decompression requires resources and time.
-- **Poor I/O performance**: More disk space → more read/write operations → more time spent loading data.
+Requires Python 3.8 or newer and numpy.
 
-FASTB solves these issues by storing nucleotides in binary directly — meaning:
+## Command line
 
-1. **Smaller file sizes without compression**
-   - Typical genome FASTA → FASTB reduction: ~60–75% in size  
-   - No gzip/bzip2 decompression step needed
+| Command | What it does |
+|---|---|
+| `fastb encode in.fasta [in2.fasta ...] [-o out.fastb] [--append] [--verify]` | FASTA to FASTB. Accepts `.fasta`, `.fa`, `.fna`, and any of those with `.gz`. Several inputs are encoded in one process, each on its own; a failed file leaves no output and the exit code is the highest per-file code. `--append` names outputs `<input>.fastb`. `--verify` re-reads each output and compares every header line and sequence with the input; on a difference it removes that output and exits 3. |
+| `fastb decode in.fastb [-o out.fasta]` | FASTB to FASTA, 80 columns (`-w 0` for one line per record). |
+| `fastb cat in.fastb` | FASTA to stdout. For pipes and process substitution. |
+| `fastb head in.fastb [-n 5]` | First N records as FASTA. |
+| `fastb extract in.fastb NAME...` | Named records, read through the index without scanning the file. |
+| `fastb index in.fastb` | Record number, name, byte offset, length. |
+| `fastb info in.fastb` | Record count, bases, bytes, bits per base, 2-bit and 4-bit record counts. |
+| `fastb stats in.fastb` | Per-record GC, N, and lowercase percentages. |
+| `fastb verify in.fastb` | Check magic line, every CRC, and the index. |
 
-2. **Faster I/O throughput**
-   - Hypothetical gain:  
-     - If your pipeline spends 20% of runtime loading/parsing FASTA,  
-       and binary load is ~4× faster, total runtime could drop by **5–10%**.
+Feeding a tool that reads plain FASTA:
 
-3. **Reduced RAM footprint**
-   - Less memory needed to store sequences in memory buffers.
+```bash
+mafft <(fastb cat genome.fastb) > aligned.fasta
+```
 
-4. **Improved data locality**
-   - Binary storage aligns more closely with CPU cache line sizes.
+Exit codes: 0 ok, 1 error, 2 some records missing, 3 bad file, 4 not nucleotide.
 
-5. **Built-in encoding flexibility**
-   - Can represent confidence levels and degenerate bases without extra storage cost.
+`fastb encode` rejects protein FASTA. Sequences with any of `F I L P Q E Z`
+are rejected outright. Sequences of 20 or more bases with more than 5% IUPAC
+degenerate codes (`W S M K R Y B D H V`) are also rejected; pass
+`--force-nucleotide` if that is a real nucleotide record.
 
----
+## Python
 
-## Encoding Modes
+```python
+import fastb
 
-FASTB supports three encoding schemes depending on the input sequence:
+fastb.write_records("out.fastb", [("chr1", "ACGTNNNNacgt")])   # streams, never buffers the file
+for name, seq in fastb.iter_records("out.fastb"):             # one record at a time
+    ...
+rec = fastb.read_record("out.fastb", "chr1")                   # by name, through the index
+rec = fastb.read_record("out.fastb", 0)                        # by position
+```
 
-### 1. **Simple Encoding** — Diad (2 bits / nucleotide)
-For uppercase ATCG(U) only.
-| ASCII Binary (8-bit) | Binary Diad (2-bit) | Base | Description |
-|----------------------|---------------------|------|-------------|
-| 01010100 | 00 | T | Thymine |
-| 01010101 | 00 | U | Uracil |
-| 01000001 | 10 | A | Adenosine |
-| 01000011 | 01 | C | Cytosine |
-| 01000111 | 11 | G | Guanine |
+## How it stores sequence
 
-First bit = Purine/Pyrimidine, Second bit = Hydrogen bonds (2→0, 3→1).
+Every base is 2 bits (A=00, C=01, G=10, T/U=11). Positions holding N,
+positions holding an ambiguity code (K, R, Y and the other IUPAC letters) or
+a gap, and positions that were lowercase are stored as short lists in the
+record header. This is the UCSC `.2bit` idea, extended to ambiguity codes. A
+record is written at 4 bits per base only when its ambiguity list would take
+more room than 4-bit packing, which means roughly more than 1 base in 40.
 
----
+Each record carries its length, encoding, alphabet (DNA or RNA), CRC32, and
+payload byte count in a plain-text header line, so `grep '^>'` works on a
+`.fastb` file. A plain-text index at the end of the file gives direct access
+to any record.
 
-### 2. **Confidence Encoding** — Triad (3 bits / nucleotide)
-For upper/lowercase ATCG(U), where case = confidence level.
-| ASCII Binary | Binary Triad | Base | Description |
-|--------------|--------------|------|-------------|
-| 01010100 | 000 | T | Thymine (high) |
-|            | 100 | t | Thymine (low) |
-| 01010101 | 000 | U | Uracil (high) |
-|            | 100 | u | Uracil (low) |
-| 01000001 | 010 | A | Adenosine (high) |
-|            | 110 | a | Adenosine (low) |
-| 01000011 | 001 | C | Cytosine (high) |
-|            | 101 | c | Cytosine (low) |
-| 01000111 | 011 | G | Guanine (high) |
-|            | 111 | g | Guanine (low) |
+## Measurements
 
-First bit = Confidence (1 high, 0 low), remaining bits = Diad code.
+Synthetic single-record FASTA, 80 columns, 10% of bases in lowercase runs
+and 1% in N runs. WSL2 Ubuntu 24.04 on a Ryzen 7 5800H (16 threads), pigz
+2.8, Python 3.12, numpy 2.5.3, files on ext4, best of 3. Wall time and peak
+RSS from `/usr/bin/time -f "%e %M"`. `fastb cat` output was byte-identical
+to `pigz -dc` for every file. Script: `bench/sweep.sh`.
 
----
+| Input | Tool | Bytes on disk | Encode s | Decode s | Peak RSS MB |
+|---|---|---|---|---|---|
+| 5 MB | pigz -6 -p 16 | 1,613,641 | 0.06 | 0.02 | 10 |
+| 5 MB | fastb | 1,255,465 | 0.20 | 0.18 | 89 |
+| 50 MB | pigz -6 -p 16 | 16,141,509 | 0.51 | 0.17 | 10 |
+| 50 MB | fastb | 12,558,640 | 0.71 | 0.36 | 274 |
+| 200 MB | pigz -6 -p 1 | 64,554,815 | 16.97 | 0.77 | 3 |
+| 200 MB | pigz -6 -p 16 | 64,554,815 | 1.85 | 0.63 | 10 |
+| 200 MB | fastb | 50,239,522 | 2.14 | 0.90 | 462 |
+| 200 MB | fastb -p 4 | 50,239,522 | 2.14 | 0.75 | 121 |
 
-### 3. **Degenerate Encoding** — Tetrad (4 bits / nucleotide)
-Supports IUPAC degenerate codes.
-| ASCII Binary (8-bit) | Binary Tetrad (4-bit) | Representative Character | Description |
-|----------------------|-----------------------|--------------------------|-------------|
-| 01011111 | 0000 | - | Dash
-| 00100000 | 0000 |   | Blank
-| 01010100 | 0100 | T | Thymine
-| 01010101 | 0100 | U | Uracil
-| 01000001 | 1000 | A | Adenosine
-| 01000011 | 0010 | C | Cytosine
-| 01000111 | 0001 | G | Guanine
-| 01010111 | 1100 | W | A/T
-| 01010011 | 0011 | S | C/G
-| 01001101 | 1010 | M | A/C
-| 01001011 | 0101 | K | G/T
-| 01010010 | 1001 | R | A/G
-| 01011001 | 0110 | Y | C/T
-| 01000010 | 0111 | B | Not A
-| 01000100 | 1101 | D | Not C
-| 01001000 | 1110 | H | Not G
-| 01010110 | 1011 | V | Not T
-| 01001110 | 1111 | N | Any
+What the numbers say:
 
-Each bit position corresponds to presence/absence of A, T(U), C, G.
+- Bytes: fastb is 22% smaller than pigz -6 at every size.
+- `pigz -dc` does not get faster with more threads (0.77 s at 1, 0.63 s at
+  16). Inflate is serial. So the decode target is fixed at about 300 MB/s
+  of FASTA out.
+- fastb decode is about 0.2 s behind pigz at every size. That 0.2 s is
+  Python and numpy start-up, not decoding: the 2-bit unpack of 200 MB takes
+  0.11 s, wrapping 0.13 s, and writing the file 0.3 s (a plain `cat` of the
+  same file takes 0.32 s on this machine). On files under about 10 MB the
+  start-up cost dominates and pigz wins outright.
+- `fastb -p N` splits records into 16 Mb chunks across N processes. It helps
+  on large files (0.90 to 0.75 s) and hurts on small ones (process start).
+- Encode: fastb single-threaded beats pigz up to 4 threads and loses to
+  pigz -p 16 by about 15%.
 
----
+## Inside EGAP
 
-## Example: Storage Savings
+Three E. coli samples (ONT + Illumina hybrid, Illumina with a reference,
+PacBio) run end to end through [EGAP](https://github.com/iPsychonaut/EGAP)
+with pigz and with FASTB, twice: once in WSL and once on a local Kubernetes
+cluster.
 
-Sequence `"TACG"` in ASCII: 01010100 01000001 01000011 01000111 (32 bits total)
+### Cluster run, format 3.1
 
-Binary Tetrad encoding: 0100 1000 0010 0001 (16 bits total)
+k3d cluster on the machine above, one pod per sample at 7 CPUs and 24Gi, the
+pigz and FASTB variants side by side. Images `egap:old` and `egap:fastb`
+(EGAP at 543be05, FASTB 3.1.0); the FASTB Job sets
+`EGAP_INTERMEDIATE_FORMAT=fastb`. Each pod undoes any compression in the
+sample folder, then times `final_compress.py` alone and prints one
+`COMPRESS_SUMMARY` line (EGAP `tests/ab/ab-test.yaml`). File sizes from
+`find -printf '%s'`. Both Jobs completed 3 of 3 samples (3 h 37 min pigz,
+3 h 44 min FASTB) with every assembler running, Flye included.
 
-Binary Diad encoding: 00 10 01 11 (8 bits total)
+| Sample | Measure | pigz | FASTB 3.1 |
+|---|---|---|---|
+| Illumina | Final assembly | 1,443,530 B | 1,160,593 B |
+| | All compressed FASTA | 63,193,972 B | 58,200,090 B |
+| | `final_compress` time | 12.1 s | 29.0 s |
+| Hybrid | Final assembly | 1,451,758 B | 1,168,250 B |
+| | All compressed FASTA | 44,132,949 B | 40,264,419 B |
+| | `final_compress` time | 14.3 s | 20.4 s |
+| PacBio | Final assembly | 1,695,559 B | 1,364,249 B |
+| | All compressed FASTA | 49,647,840 B | 44,498,569 B |
+| | `final_compress` time | 6.2 s | 15.7 s |
+| All three | Compressed FASTA | 156,974,761 B | 142,963,078 B |
+| | `final_compress` time | 32.6 s | 65.2 s |
 
-**Reduction:** From 32 bits → 8 bits (75% smaller).
+FASTB wrote 57 files, all at 2 bits per base; 8 carry an IUPAC list. The
+assemblies have the same size, contig count, and N50 in both variants
+(Illumina 4.64 Mb in 1 contig; hybrid 4.66 Mb, 17 contigs, N50 465 kb;
+PacBio 5.46 Mb, 3 contigs, N50 2.94 Mb). Sample folders after compression
+differ by up to 17 MB between variants, all of it in MaSuRCA's working
+files, which vary run to run.
 
-### Example Short-Sequence (i.e. single fungal ITS)
+### Hybrid sample, third run
 
-<div align="center">
-  <img src="resources/short_comparison.png" alt="Short-Sequence Comparison" width="900">
-</div>
+Same cluster and limits, hybrid sample only, EGAP at 51ef6bf and FASTB at
+c349a91. Two things changed since the table above: the Illumina reads now
+come from the same isolate as the ONT reads (SRR15116275 for SRR32405433;
+the earlier run paired an unrelated isolate, which was why the hybrid
+assembly had 17 contigs), and `fastb_compress` verifies the round trip
+inside `fastb encode --verify` instead of a second process. Both variants
+finished in 119 min with the same final assembly: 3 contigs, 5,013,404 bp.
 
-### Example Long-Sequence (i.e. full fungal genome)
+| Hybrid, third run | pigz | FASTB 3.1 |
+|---|---|---|
+| Final assembly | 1,547,551 B | 1,253,877 B |
+| All compressed FASTA | 58,848,086 B | 52,984,248 B |
+| `final_compress` time | 20.9 s | 31.4 s |
 
-<div align="center">
-  <img src="resources/long_comparison.png" alt="Long-Sequence Comparison" width="900">
-</div>
+Final assembly 19.0% smaller, all FASTA 10.0% smaller, compression step
+1.5x pigz's time. 23 `.fastb` files and 18 `.fasta.gz` (protein and
+headers with descriptions go to pigz). With all 41 files sent to one
+`fastb encode` process (EGAP c669617, FASTB 3d0a65a) instead of one
+process per file, the same step re-timed on the same folder took 21.3 s,
+1.02x pigz; per file, Python start-up had been 70% of FASTB's cost. With
+one process per CPU, each on its own chunk of files (EGAP fd64e6a), it
+took 16.9 s, 0.81x pigz; with fastb imported into EGAP's Python and the
+workers forked from it, no start-up at all (EGAP 789965e), 16.5 s. Same
+outputs each time. What remains of the step is pigz on the FASTQ and
+fallback files.
 
----
+### WSL run, format 3.0 then 3.1
 
-## v2.1 Updates
+Same machine, 16 threads, 48 GB, `--intermediate_format pigz` then `fastb`,
+each arm with its own fresh input and output folders, disk use sampled every
+30 s with `du -sb`. The FASTB arm ran format 3.0; the 3.1 column re-encodes
+that arm's 54 `.fastb` files afterwards (`fastb cat -w 0 x.fastb | fastb
+encode`), with every round trip checked by `cmp`.
 
-- **Refined encoding marker system**  
-  - Now each record has an explicit encoding marker for decoding without guessing.
-- **Improved I/O pipeline**  
-  - Sequential read/write optimizations.
-- **Error handling**  
-  - Rejects unsupported amino acid FASTA files with a clear message.
-- **Cleaner separation** of metadata, encoding marker, sequence, and record terminator.
-- **Standalone Editor** useful for pulling out or saving sequences for use in other applications; client side and via PyQt5-interface.
-- **HTML Implementation** useful for pulling out or saving sequences for use in other applications; client side and on via web-interface.
+| | pigz | fastb 3.0 | fastb 3.1 |
+|---|---|---|---|
+| Wall time, 3 samples | 6,852 s | 6,843 s | not rerun |
+| Peak disk | 23.523 GB | 23.517 GB | not rerun |
+| Compressed FASTA, all files | 138,976,865 B | 129,496,900 B | 125,362,296 B |
+| The 54 files FASTB encodes | 79,692,469 B | 70,243,637 B | 66,109,033 B |
+| Hybrid final assembly (4.66 Mb, 6 IUPAC bases) | 1,452,135 B | 1,755,783 B | 1,167,801 B |
 
----
+### What the numbers say
 
-## Planned Expansion
+- Each final assembly is about 20% smaller as FASTB 3.1 than as pigz -6
+  (19.5 to 19.6% in all three cluster samples).
+- Across all of a run's FASTA files the saving is about 9%, because about
+  half of them stay on pigz (see below). On a 5 Mb genome that is 14 MB out
+  of several GB: reads, VCF, and GFF files are most of what EGAP writes.
+- FASTB's compression step takes about twice as long as pigz here: 65 s
+  against 33 s over three samples. Each file is decoded and compared with
+  the original before the original is deleted, and Python starts twice per
+  file. Total run time did not change measurably (6,843 s against 6,852 s
+  in WSL; 3 h 44 min against 3 h 37 min in the cluster, where pods share
+  the host).
+- On the files it encodes, FASTB 3.1 is 17% smaller than pigz -6.
+- Format 3.0 was larger than pigz on every Pilon-polished assembly: 6
+  ambiguity codes put 3 of 17 contigs in 4-bit. That is why 3.1 has the
+  IUPAC list.
+- 46 of 100 FASTA files stayed on pigz, all for sound reasons: 36 protein
+  files from Compleasm, and 10 that were empty or whose headers carry
+  descriptions that FASTB would drop (Racon's `LN:i:` tags, for example).
+- The final assemblies were not byte-identical between runs, with or without
+  FASTB. The hybrid assembly differed between two pigz runs, and the one
+  PacBio difference (4 bp in one contig) was already present in Flye's raw
+  output, before FASTB is first used.
 
-- **FASTQ (Illumina)** with integrated quality score encoding  
-- **FAST5 (Nanopore)** sequence embedding  
-- **Image-based storage**: Encode nucleotide bits directly into RGBA pixel channels for steganographic + redundant data storage.
+## Not in scope
 
----
+Quality scores (FASTQ), FAST5, per-position annotations, compression.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).

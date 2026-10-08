@@ -1,1 +1,9 @@
 ARCHIVE
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+dist/
+*.egg-info/
+*.tmp
+*.bench/
